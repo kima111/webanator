@@ -1,6 +1,3 @@
-import { NextLogo } from "./next-logo";
-import { SupabaseLogo } from "./supabase-logo";
-
 export function Hero() {
   return (
     <div className="flex flex-col gap-16 items-center">
@@ -10,34 +7,20 @@ export function Hero() {
           target="_blank"
           rel="noreferrer"
         >
-          <SupabaseLogo />
         </a>
         <span className="border-l rotate-45 h-6" />
         <a href="https://nextjs.org/" target="_blank" rel="noreferrer">
-          <NextLogo />
         </a>
       </div>
-      <h1 className="sr-only">Supabase and Next.js Starter Template</h1>
-      <p className="text-3xl lg:text-4xl !leading-tight mx-auto max-w-xl text-center">
-        The fastest way to build apps with{" "}
-        <a
-          href="https://supabase.com/?utm_source=create-next-app&utm_medium=template&utm_term=nextjs"
-          target="_blank"
-          className="font-bold hover:underline"
-          rel="noreferrer"
-        >
-          Supabase
-        </a>{" "}
-        and{" "}
-        <a
-          href="https://nextjs.org/"
-          target="_blank"
-          className="font-bold hover:underline"
-          rel="noreferrer"
-        >
-          Next.js
-        </a>
+      <h1 className="sr-only">Webannator</h1>
+      <p className="text-3xl lg:text-2xl !leading-tight mx-auto max-w-xl text-center">
+        Welcome to Webannotator, your go-to tool for seamless web page annotation!
       </p>
+      <p className="max-w-lg text-center text-muted-foreground">
+        Sign up and start annotating any webpage with ease. Perfect for
+        researchers, students, and professionals alike.
+      </p>
+      
       <div className="w-full p-[1px] bg-gradient-to-r from-transparent via-foreground/10 to-transparent my-8" />
     </div>
   );

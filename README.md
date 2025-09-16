@@ -94,6 +94,23 @@ If you wish to just develop locally and not deploy to Vercel, [follow the steps 
 
 > Check out [the docs for Local Development](https://supabase.com/docs/guides/getting-started/local-development) to also run Supabase locally.
 
+## Database setup (roles, members, comments, RLS)
+
+- Open Supabase Dashboard → SQL editor and run the contents of `db/migrations.sql`.
+  - This adds `role` and `joined_at` to `project_members`, creates `project_comments`, enables RLS, and installs role-aware policies.
+
+## Auth email configuration (Supabase SMTP)
+
+- Supabase Dashboard → Authentication → Email → SMTP: add your SMTP credentials.
+- Supabase Dashboard → Authentication → URL Configuration:
+  - Set `Site URL` (dev) to `http://localhost:3000`.
+  - Add `http://localhost:3000/protected` to Additional Redirect URLs.
+
+With this setup:
+- Owners can invite/remove members and assign roles.
+- Viewers can view project content and comments.
+- Editors can add and edit their own comments; owners can edit/remove any.
+
 ## Feedback and issues
 
 Please file feedback and issues over on the [Supabase GitHub org](https://github.com/supabase/supabase/issues/new/choose).

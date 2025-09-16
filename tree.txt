@@ -1,0 +1,71 @@
+.
+├── app
+│   ├── auth
+│   │   ├── confirm
+│   │   ├── error
+│   │   ├── forgot-password
+│   │   ├── login
+│   │   ├── sign-up
+│   │   ├── sign-up-success
+│   │   └── update-password
+│   ├── favicon.ico
+│   ├── globals.css
+│   ├── layout.tsx
+│   ├── page.tsx
+│   ├── projects
+│   │   └── page.tsx
+│   └── protected
+│       ├── layout.tsx
+│       └── page.tsx
+├── components
+│   ├── auth-button.tsx
+│   ├── env-var-warning.tsx
+│   ├── forgot-password-form.tsx
+│   ├── hero.tsx
+│   ├── login-form.tsx
+│   ├── logout-button.tsx
+│   ├── members-dialog.tsx
+│   ├── sign-up-form.tsx
+│   ├── theme-switcher.tsx
+│   ├── tutorial
+│   │   ├── code-block.tsx
+│   │   ├── connect-supabase-steps.tsx
+│   │   ├── fetch-data-steps.tsx
+│   │   ├── sign-up-user-steps.tsx
+│   │   └── tutorial-step.tsx
+│   ├── ui
+│   │   ├── badge.tsx
+│   │   ├── button.tsx
+│   │   ├── card.tsx
+│   │   ├── checkbox.tsx
+│   │   ├── dialog.tsx
+│   │   ├── dropdown-menu.tsx
+│   │   ├── input.tsx
+│   │   └── label.tsx
+│   └── update-password-form.tsx
+├── components.json
+├── db
+│   └── migrations.sql
+├── eslint.config.mjs
+├── lib
+│   ├── email
+│   │   └── resend.ts
+│   ├── supabase
+│   │   ├── admin.ts
+│   │   ├── client.ts
+│   │   ├── middleware.ts
+│   │   └── server.ts
+│   └── utils.ts
+├── middleware.ts
+├── next-env.d.ts
+├── next.config.ts
+├── package-lock.json
+├── package.json
+├── postcss.config.mjs
+├── README.md
+├── tailwind.config.ts
+├── tree.txt
+├── tsconfig.json
+└── website-annotator.zip
+
+19 directories, 50 files
