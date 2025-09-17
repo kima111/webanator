@@ -10,7 +10,7 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
   const [tempUrl, setTempUrl] = useState<string>(initialUrl || "");
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
 
-  const { annotations, createAnnotation } = useAnnotationRealtime(projectId, pageUrl);
+  const { annotations, createAnnotation } = useAnnotationRealtime(projectId);
   const { messages, sendMessage, subscribeTo, deleteMessage } = useMessagesRealtime();
 
   useEffect(() => {
@@ -126,7 +126,14 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
         </div>
         <div className="col-span-4 min-h-0 flex flex-col">
           <div className="flex-1 min-h-0 border rounded">
-            <AnnotationList items={annotations} activeId={activeAnnotationId} onSelect={setActiveAnnotationId} />
+            <AnnotationList
+              items={annotations}
+              activeId={activeAnnotationId}
+              onSelect={setActiveAnnotationId}
+              currentPageUrl={pageUrl}
+              onNavigateToUrl={(url) => setPageUrl(toProxied(url))}
+              refresh={createAnnotation} // <-- pass this prop
+            />
           </div>
           <div className="mt-4">
             <MessagePanel
