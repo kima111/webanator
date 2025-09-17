@@ -8,6 +8,7 @@ export interface Selector {
 
 export interface AnnotationBody {
   text?: string;
+  anchor?: { x: number; y: number };
   [key: string]: unknown;
 }
 

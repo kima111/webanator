@@ -1,22 +1,38 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import type { Annotation } from "@/lib/types/annotations";
 
 type Point = { x: number; y: number };
-type Ann = { id: string; body?: { text?: string; anchor?: Point } | null };
 
 type Props = {
   url: string;
-  annotations: Ann[];
+  annotations: Annotation[];
   onSelect: (id: string) => void;
   onCreateAt?: (input: {
     url: string;
     selector: { type: "css"; value: string };
-    anchor: Point; // store as 0..1 percentages
+    anchor: Point;
     text: string;
   }) => void;
 };
 
 export default function IframeOverlay({ url, annotations, onSelect, onCreateAt }: Props) {
+  const [shiftHeld, setShiftHeld] = useState(false);
+  // Listen for shift key to enable overlay pointer events
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Shift") setShiftHeld(true);
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Shift") setShiftHeld(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, []);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const [scroll, setScroll] = useState({ left: 0, top: 0 });
@@ -94,29 +110,27 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt }
         className="w-full h-full border-0"
         sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
       />
-      {/* Overlay captures Shift+Click for new pins and renders existing pins */}
       <div
         ref={overlayRef}
         className="absolute top-0 left-0"
         style={{
           width: contentSize.width,
           height: contentSize.height,
-          pointerEvents: "auto",
+          pointerEvents: shiftHeld ? "auto" : "none",
           transform: `translate(${-scroll.left}px, ${-scroll.top}px)`
         }}
         onClick={handleOverlayClick}
-        title="Shift+Click to add a pin"
+        title="Shift+Click to add a pin (hold Shift to enable overlay)"
       >
-        {annotations.map((a) => {
-          const anchor = a.body?.anchor;
-          // Position by anchor percentages if present, else fall back to top-left corner
-          const top = anchor ? anchor.y * contentSize.height : 20;
-          const left = anchor ? anchor.x * contentSize.width : 20;
+        {annotations.map((a: Annotation) => {
+          const anchor = a.body?.anchor as Point | undefined;
+          const topPx = anchor ? anchor.y * contentSize.height : 20;
+          const leftPx = anchor ? anchor.x * contentSize.width : 20;
           return (
             <div
               key={a.id}
               className="absolute bg-red-500 rounded-full w-3 h-3"
-              style={{ top, left, transform: "translate(-50%, -50%)", cursor: "pointer" }}
+              style={{ top: topPx, left: leftPx, transform: "translate(-50%, -50%)", cursor: "pointer" }}
               onClick={(ev) => {
                 ev.stopPropagation();
                 onSelect(a.id);
