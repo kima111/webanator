@@ -28,4 +28,5 @@ export interface AnnotationMessage {
   author_id: string | null;
   body: string;
   created_at: string;
+  author_email?: string | null;
 }
