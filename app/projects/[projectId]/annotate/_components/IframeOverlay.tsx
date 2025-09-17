@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Point = { x: number; y: number };
 type Ann = { id: string; body?: { text?: string; anchor?: Point } | null };
@@ -19,6 +19,8 @@ type Props = {
 export default function IframeOverlay({ url, annotations, onSelect, onCreateAt }: Props) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  const [scroll, setScroll] = useState({ left: 0, top: 0 });
+  const [contentSize, setContentSize] = useState({ width: 1, height: 1 });
 
   // Listen for clicks coming from inside the iframe (if your injected script posts messages)
   useEffect(() => {
@@ -37,6 +39,28 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt }
 
   // Empty/invalid URL guard
   const src = url?.trim() ? url : "about:blank";
+
+  // Sync overlay with iframe scroll and content size
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    function updateOverlay() {
+      try {
+        if (!iframe) return;
+        const doc = iframe.contentDocument || iframe.contentWindow?.document;
+        if (!doc) return;
+        const scrollLeft = doc.documentElement.scrollLeft || doc.body.scrollLeft;
+        const scrollTop = doc.documentElement.scrollTop || doc.body.scrollTop;
+        setScroll({ left: scrollLeft, top: scrollTop });
+        const width = doc.documentElement.scrollWidth || doc.body.scrollWidth;
+        const height = doc.documentElement.scrollHeight || doc.body.scrollHeight;
+        setContentSize({ width, height });
+      } catch {}
+    }
+    updateOverlay();
+    const interval = setInterval(updateOverlay, 100); // Polling for cross-origin safety
+    return () => clearInterval(interval);
+  }, [src]);
 
   // Create a pin at click position (Shift+Click)
   function handleOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
@@ -73,17 +97,21 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt }
       {/* Overlay captures Shift+Click for new pins and renders existing pins */}
       <div
         ref={overlayRef}
-        className="absolute inset-0"
+        className="absolute top-0 left-0"
+        style={{
+          width: contentSize.width,
+          height: contentSize.height,
+          pointerEvents: "auto",
+          transform: `translate(${-scroll.left}px, ${-scroll.top}px)`
+        }}
         onClick={handleOverlayClick}
-        // Allow interacting with pins while letting iframe receive normal clicks unless Shift is held
-        style={{ pointerEvents: "auto" }}
         title="Shift+Click to add a pin"
       >
         {annotations.map((a) => {
           const anchor = a.body?.anchor;
           // Position by anchor percentages if present, else fall back to top-left corner
-          const top = anchor ? `${anchor.y * 100}%` : "20px";
-          const left = anchor ? `${anchor.x * 100}%` : "20px";
+          const top = anchor ? anchor.y * contentSize.height : 20;
+          const left = anchor ? anchor.x * contentSize.width : 20;
           return (
             <div
               key={a.id}

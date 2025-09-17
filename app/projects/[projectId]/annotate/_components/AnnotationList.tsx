@@ -3,6 +3,12 @@ import { cn } from "@/lib/utils";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 
+const STATUS_OPTIONS = [
+  { value: "open", label: "Open" },
+  { value: "resolved", label: "Resolved" },
+  { value: "archived", label: "Archived" },
+];
+
 type Ann = {
   id?: string;
   url?: string;
@@ -31,6 +37,7 @@ export default function AnnotationList({
 }) {
   const safeItems = Array.isArray(items) ? items : [];
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [updating, setUpdating] = useState<string | null>(null);
 
   async function handleDelete(id?: string) {
     if (!id) return;
@@ -38,6 +45,17 @@ export default function AnnotationList({
     await fetch(`/api/annotations/${id}`, { method: "DELETE" });
     setDeleting(null);
     refresh?.(); // <-- force refresh after delete
+  }
+
+  async function handleStatusChange(id: string, status: string) {
+    setUpdating(id);
+    await fetch(`/api/annotations/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    setUpdating(null);
+    refresh?.();
   }
 
   // Helper to build the annotate URL for the project
@@ -83,7 +101,22 @@ export default function AnnotationList({
                 {a.body?.display_name ?? "Unknown"}
                 {a.body?.time_of_day ? ` • ${a.body.time_of_day}` : ""}
               </div>
-              <div className="text-xs text-muted-foreground">{a.status ?? ""}</div>
+              <div className="text-xs text-muted-foreground">
+                <select
+                  className="border rounded px-1 py-0.5 text-xs"
+                  value={a.status ?? "todo"}
+                  disabled={updating === a.id}
+                  onChange={e => a.id && handleStatusChange(a.id, e.target.value)}
+                  style={{ minWidth: 110 }}
+                >
+                  {STATUS_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                {updating === a.id && <span className="ml-2 text-xs text-muted-foreground">Saving…</span>}
+              </div>
               {a.url && (
                 <div className="text-xs mt-1">
                   <button
