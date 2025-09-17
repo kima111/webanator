@@ -11,7 +11,7 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
 
   const { annotations, createAnnotation } = useAnnotationRealtime(projectId, pageUrl);
-  const { messages, sendMessage, subscribeTo } = useMessagesRealtime();
+  const { messages, sendMessage, subscribeTo, deleteMessage } = useMessagesRealtime();
 
   useEffect(() => {
     if (activeAnnotationId) subscribeTo(activeAnnotationId);
@@ -129,7 +129,12 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
             <AnnotationList items={annotations} activeId={activeAnnotationId} onSelect={setActiveAnnotationId} />
           </div>
           <div className="mt-4">
-            <MessagePanel annotationId={activeAnnotationId} messages={messages} onSend={sendMessage} />
+            <MessagePanel
+              annotationId={activeAnnotationId}
+              messages={messages}
+              onSend={sendMessage}
+              onDelete={deleteMessage}
+            />
           </div>
         </div>
       </div>

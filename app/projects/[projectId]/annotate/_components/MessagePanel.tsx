@@ -8,10 +8,12 @@ export default function MessagePanel({
   annotationId,
   messages,
   onSend,
+  onDelete,
 }: {
   annotationId: string | null;
   messages: AnnotationMessage[]; // <-- allow author_id: string | null
   onSend: (annotationId: string, body: string) => Promise<void>;
+  onDelete?: (annotationId: string, messageId: string) => Promise<void>;
 }) {
   const [text, setText] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -32,15 +34,27 @@ export default function MessagePanel({
     <div className="h-full flex flex-col">
       <div className="flex-1 overflow-auto p-3 space-y-3">
         {messages.map((m) => (
-          <div key={m.id} className="text-sm p-2 rounded-md border">
-            <div className="text-xs text-muted-foreground mb-1">
-              {new Date(m.created_at).toLocaleString()}
+          <div key={m.id} className="text-sm p-2 rounded-md border flex items-center justify-between gap-2">
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">
+                {new Date(m.created_at).toLocaleString()}
+              </div>
+              <div className="text-xs text-muted-foreground mb-1">
+                {m.author_email ? m.author_email : m.author_id ?? "Unknown"}
+              </div>
+              <div>{m.body}</div>
             </div>
-            {/* Optional: show author when available */}
-            {/* <div className="text-xs text-muted-foreground">
-              {m.author_id ?? "Unknown"}
-            </div> */}
-            <div>{m.body}</div>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={async () => {
+                if (typeof m.id === "string" && annotationId && typeof onDelete === "function") {
+                  await onDelete(annotationId, m.id);
+                }
+              }}
+            >
+              Delete
+            </Button>
           </div>
         ))}
         <div ref={bottomRef} />

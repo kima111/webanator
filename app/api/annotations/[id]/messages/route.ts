@@ -1,10 +1,8 @@
-import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-
-type Ctx = { params: { id: string } }; // local helper for our casts
-
-export async function GET(_req: Request, context: unknown) {
-  const { id } = (context as Ctx).params;
+export async function DELETE(_req: Request, context: unknown) {
+  const { id } = await (context as Ctx).params;
+  const url = new URL(_req.url);
+  const messageId = url.searchParams.get("messageId");
+  if (!messageId) return NextResponse.json({ error: "Missing messageId" }, { status: 400 });
 
   const supa = await createClient();
   const {
@@ -12,18 +10,48 @@ export async function GET(_req: Request, context: unknown) {
   } = await supa.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data, error } = await supa
+  const { error } = await supa
     .from("annotation_messages")
-    .select("*")
+    .delete()
+    .eq("id", messageId)
     .eq("annotation_id", id)
-    .order("created_at");
+    .eq("author_id", user.id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-  return NextResponse.json({ messages: data });
+  return NextResponse.json({ success: true });
+}
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+type Ctx = { params: { id: string } }; // local helper for our casts
+
+export async function GET(_req: Request, context: unknown) {
+  const { id } = await (context as Ctx).params;
+
+  const supa = await createClient();
+  const {
+    data: { user },
+  } = await supa.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const { data, error } = await supa
+      .from("annotation_messages")
+      .select("*")
+      .eq("annotation_id", id)
+      .order("created_at");
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  // Flatten author info into each message as author_email
+    type MessageWithAuthor = Partial<import("@/lib/types/annotations").AnnotationMessage> & { author?: { id: string; email: string } };
+  const messages = (data ?? []).map((msg: MessageWithAuthor) => ({
+    ...msg,
+    author_email: msg.author?.email ?? null,
+  }));
+  return NextResponse.json({ messages });
 }
 
 export async function POST(req: Request, context: unknown) {
-  const { id } = (context as Ctx).params;
+  const { id } = await (context as Ctx).params;
 
   const supa = await createClient();
   const {

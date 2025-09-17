@@ -55,5 +55,14 @@ export function useMessagesRealtime() {
     });
   }, []);
 
-  return { messages, sendMessage, subscribeTo };
+  const deleteMessage = useCallback(async (annotationId: string, messageId: string) => {
+    await fetch(`/api/annotations/${annotationId}/messages?messageId=${encodeURIComponent(messageId)}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    // Refresh messages after delete
+    await subscribeTo(annotationId);
+  }, [subscribeTo]);
+
+  return { messages, sendMessage, subscribeTo, deleteMessage };
 }

@@ -64,10 +64,13 @@ export async function PATCH(req: NextRequest, context: unknown) {
   return NextResponse.json({ annotation: data });
 }
 
-export async function DELETE(_req: NextRequest, context: unknown) {
-  const { id } = (context as RouteParams).params;
+type Ctx = { params: { id: string } };
+export async function DELETE(_req: Request, context: unknown) {
+  const { id } = (context as Ctx).params;
   const supa = await createClient();
-  const user = (await supa.auth.getUser())?.data?.user;
+  const {
+    data: { user },
+  } = await supa.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { error } = await supa.from("annotations").delete().eq("id", id);
@@ -149,6 +152,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing fields" }, { status: 400 });
     }
 
+    // --- Add display name and time of day to annotation body ---
+    const now = new Date();
+    const timeOfDay = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    // Try to use username, fallback to first/last name, fallback to email
+    const meta = user.user_metadata || {};
+    const displayName =
+      meta.username ||
+      [meta.first_name, meta.last_name].filter(Boolean).join(" ") ||
+      user.email ||
+      "Unknown";
+
+    const annotationBody = {
+      ...body,
+      display_name: displayName,
+      time_of_day: timeOfDay,
+    };
+
     const { data, error } = await supabase
       .from("annotations")
       .insert([
@@ -156,7 +176,7 @@ export async function POST(req: Request) {
           project_id,
           url: normalizedUrl,
           selector: finalSelector,
-          body: body ?? {},
+          body: annotationBody,
           status: status ?? "open",
           created_by: user.id,
         },
