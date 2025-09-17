@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import type { Annotation, AnnotationMessage } from "@/lib/types/annotations";
+import { createClient } from "@/lib/supabase/client";
 
 export function useAnnotationRealtime(projectId: string, url?: string) {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -31,6 +32,31 @@ export function useAnnotationRealtime(projectId: string, url?: string) {
 
   useEffect(() => {
     void fetchAll();
+  }, [fetchAll]);
+
+  // --- Realtime subscription ---
+  useEffect(() => {
+    const supabase = createClient();
+    const channel = supabase
+      .channel("annotations:global")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "annotations",
+          // No filter!
+        },
+        (payload) => {
+          console.log("Supabase Realtime event (annotations):", payload);
+          fetchAll();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [fetchAll]);
 
   // keep signature stable with previous usage
