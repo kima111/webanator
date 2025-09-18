@@ -47,6 +47,12 @@ export async function updateSession(request: NextRequest) {
   const { data } = await supabase.auth.getClaims();
   const user = data?.claims;
 
+  // Allow unauthenticated access to the proxy endpoint to enable external browsing
+  // and health checks/smoke tests without forcing login.
+  if (request.nextUrl.pathname.startsWith("/api/proxy")) {
+    return supabaseResponse;
+  }
+
   if (
     request.nextUrl.pathname !== "/" &&
     !user &&
