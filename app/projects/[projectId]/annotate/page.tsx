@@ -62,6 +62,9 @@ export default async function AnnotatePage(props: PageProps) {
 
       {/* Full-bleed wrapper to avoid parent width constraints */}
       <div className="w-[95vw] mx-auto">
+        <div className="mb-2 text-xs text-muted-foreground py-2 text-center">
+          Tip: Hold <kbd className="px-1 py-0.5 border rounded">Shift</kbd> and click inside the page to create a pin.
+        </div>
         <AnnotatorShell projectId={projectId} initialUrl={proxiedInitial} />
       </div>
     </>
