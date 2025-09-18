@@ -56,6 +56,37 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt }
   // Empty/invalid URL guard
   const src = url?.trim() ? url : "about:blank";
 
+  // Canonicalize a URL. Unwraps /api/proxy?url=... and removes hash, normalizes trailing slash.
+  function canonicalize(raw?: string): string {
+    if (!raw) return "";
+    try {
+      const base = typeof window !== "undefined" ? window.location.origin : "http://localhost";
+      const u = new URL(raw, base);
+      let external = raw;
+
+      // Unwrap proxied URLs like /api/proxy?url=<external>
+      if (u.pathname.startsWith("/api/proxy")) {
+        external = u.searchParams.get("url") ?? "";
+      }
+
+      if (!external) return "";
+
+      const e = new URL(external);
+      e.hash = "";
+      // Normalize trailing slash (keep "/" for root)
+      e.pathname = e.pathname.replace(/\/+$/, "") || "/";
+      // Drop default ports
+      const host = e.port && !["80", "443"].includes(e.port) ? `${e.hostname}:${e.port}` : e.hostname;
+      return `${e.protocol}//${host}${e.pathname}${e.search}`;
+    } catch {
+      return (raw.split("#")[0] ?? "").replace(/\/+$/, "") || "/";
+    }
+  }
+
+  // Only show pins for the current annotated page
+  const currentPage = canonicalize(src);
+  const visibleAnnotations = annotations.filter(a => canonicalize(a.url) === currentPage);
+
   // Sync overlay with iframe scroll and content size
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -122,7 +153,7 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt }
         onClick={handleOverlayClick}
         title="Shift+Click to add a pin (hold Shift to enable overlay)"
       >
-        {annotations.map((a: Annotation) => {
+        {visibleAnnotations.map((a: Annotation) => {
           const anchor = a.body?.anchor as Point | undefined;
           const topPx = anchor ? anchor.y * contentSize.height : 20;
           const leftPx = anchor ? anchor.x * contentSize.width : 20;
