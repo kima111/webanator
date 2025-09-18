@@ -372,6 +372,9 @@ export default async function ProtectedPage() {
           <p className="text-sm text-muted-foreground">
             Loaded from your Supabase table <code>projects</code>.
           </p>
+          <p className="text-xs text-muted-foreground">
+            Tip: Open a project to launch the annotator. To place an annotation, hold <kbd className="px-1 py-0.5 border rounded">Shift</kbd> and click on the page.
+          </p>
         </div>
 
         {/* Projects grid: make each project clickable to open Annotator */}
