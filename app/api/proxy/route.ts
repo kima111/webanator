@@ -51,6 +51,13 @@ function isAlreadyProxied(href: string, proxyOrigin: string) {
 function rewriteCssUrls(css: string, proxyOrigin: string, base: URL) {
   return css.replace(/url\((['"]?)([^'")]+)\1\)/g, (_m, q, u) => {
     if (/^(data:|blob:|about:|javascript:)/i.test(u)) return `url(${q}${u}${q})`;
+    // Skip about:blank variants even if expressed as protocol-relative
+    try {
+      const absTest = new URL(u, base);
+      if (absTest.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(absTest.pathname)) {
+        return `url(${q}${u}${q})`;
+      }
+    } catch {}
     const abs = absolutize(u, base);
     // Avoid double-proxy
     if (isAlreadyProxied(abs, proxyOrigin)) return `url(${q}${abs}${q})`;
@@ -123,47 +130,48 @@ export async function GET(req: NextRequest) {
   // ----- 2) Fetch upstream with realistic headers -----
   let upstream: Response;
   try {
-    const crossSite = target.origin !== proxyOrigin;
     const ua =
       req.headers.get("user-agent") ??
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
     const acceptLang = req.headers.get("accept-language") ?? "en-US,en;q=0.9";
 
     // Stricter Accept for SVG/images to satisfy some CDNs
-    const accept =
-      req.headers.get("accept") ??
+    const accept = req.headers.get("accept") ??
       (isImage
         ? "image/svg+xml,image/avif,image/webp,image/*;q=0.8,*/*;q=0.5"
         : isAssetReq
         ? "*/*"
-        : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        : "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
 
-    // Use full page URL as Referer for assets (common hotlink requirement),
-    // otherwise origin root for documents.
-    const referer = isAssetReq ? target.toString() : `${target.origin}/`;
-
-    // Do NOT send Origin on GETs; some origins reject it for images/docs.
+    // Conservative headers: avoid browser-only sec-fetch-* which can confuse some origins
     const hdrs: Record<string, string> = {
       accept,
       "user-agent": ua,
       "accept-language": acceptLang,
-      referer,
-      // Force uncompressed upstream bodies to avoid decode mismatches
+      // Avoid compression to simplify downstream handling
       "accept-encoding": "identity",
-      "sec-fetch-mode": isAssetReq ? "no-cors" : "navigate",
-      "sec-fetch-dest": isAssetReq ? (isImage ? "image" : "empty") : "document",
-      "sec-fetch-site": crossSite ? "cross-site" : "same-origin",
     };
 
-    upstream = await fetch(target.toString(), {
-      headers: hdrs,
-      redirect: "follow",
-      credentials: "omit",
-    });
+    // Add Referer only for asset requests to satisfy hotlink protections
+    if (isAssetReq) hdrs["referer"] = target.toString();
+
+    // Apply a timeout to avoid hanging on unresponsive origins
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    try {
+      upstream = await fetch(target.toString(), {
+        headers: hdrs,
+        redirect: "follow",
+        credentials: "omit",
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
-      { error: "Upstream fetch failed", detail: msg },
+      { error: "Upstream fetch failed", detail: msg, target: target?.toString?.() },
       { status: 502 }
     );
   }
@@ -204,10 +212,17 @@ export async function GET(req: NextRequest) {
     // Refined asset detection: only mark typical static file extensions as assets
     const assetExtRe = /\.(?:js|mjs|css|png|jpe?g|gif|webp|avif|svg|ico|bmp|webm|mp4|mp3|wav|ogg|woff2?|ttf|otf|map)(?:[?#].*)?$/i;
 
-    // ---------- REWRITE ATTRIBUTES (href/src/srcset/imagesrcset) ----------
-    // 1) href/src
-    html = html.replace(/(src|href)\s*=\s*(['"])(.*?)\2/gi, (_m, attr, q, val) => {
-      if (/^(#|mailto:|tel:|javascript:|data:|blob:)/i.test(val)) return `${attr}=${q}${val}${q}`;
+  // ---------- REWRITE ATTRIBUTES (href/src/srcset/imagesrcset) ----------
+  // 1) href/src
+  html = html.replace(/(src|href)\s*=\s*(['"])(.*?)\2/gi, (_m, attr, q, val) => {
+      if (/^(#|mailto:|tel:|javascript:|data:|blob:|about:)/i.test(val)) return `${attr}=${q}${val}${q}`;
+      // Skip about:blank expressed as protocol-relative //about//blank
+      try {
+        const test = new URL(val, target);
+        if (test.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(test.pathname)) {
+          return `${attr}=${q}${val}${q}`;
+        }
+      } catch {}
       const abs = absolutize(val, target);
       if (isAlreadyProxied(abs, proxyOrigin)) return `${attr}=${q}${abs}${q}`;
       const isAsset = assetExtRe.test(abs);
@@ -228,6 +243,11 @@ html = html.replace(
       const url = m[1];
       const descriptor = m[2] ?? "";
       if (/^(data:|blob:)/i.test(url)) return part;
+      // Skip about:blank-like URLs that may appear as //about//blank
+      try {
+        const test = new URL(url, target);
+        if (test.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(test.pathname)) return part;
+      } catch {}
       const abs = absolutize(url, target);
       const proxied = isAlreadyProxied(abs, proxyOrigin)
         ? abs
@@ -264,17 +284,39 @@ html = html.replace(
               return u.origin === PROXY_ORIGIN && u.pathname.indexOf("/api/proxy") === 0;
             } catch { return false; }
           }
+          function remapIfAppOrigin(uStr){
+            try {
+              var u = new URL(uStr, PROXY_ORIGIN);
+              if (u.origin === PROXY_ORIGIN && u.pathname.indexOf('/api/proxy') !== 0) {
+                // Remap to external BASE origin, keep path + search
+                var base = new URL(BASE);
+                return new URL(u.pathname + u.search, base.origin).toString();
+              }
+            } catch {}
+            return uStr;
+          }
+          function isAboutBlankLike(h){
+            try {
+              if (typeof h === 'string' && /^about:(?:blank)?$/i.test(h.trim())) return true;
+              var u = new URL(h, BASE);
+              if (u.hostname && u.hostname.toLowerCase() === 'about' && /^\/+blank$/i.test(u.pathname)) return true;
+            } catch {}
+            return false;
+          }
           function go(u){
             if (!u) return;
-            if (isProxied(u)) { location.assign(u); }
-            else { location.assign(PROXY_BASE + encodeURIComponent(toAbs(u))); }
+            if (isAboutBlankLike(u)) return;
+            // Normalize and remap app-origin absolutes back to external origin
+            var target = remapIfAppOrigin(u);
+            if (isProxied(target)) { location.assign(target); }
+            else { location.assign(PROXY_BASE + encodeURIComponent(toAbs(target))); }
           }
 
           document.addEventListener("click", function (e) {
             var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
             if (!a) return;
             var href = a.getAttribute("href");
-            if (!href || href.startsWith("#") || href.startsWith("javascript:") || href.startsWith("mailto:")) return;
+            if (!href || href.startsWith("#") || href.startsWith("javascript:") || href.startsWith("mailto:") || href.startsWith("about:") || isAboutBlankLike(href)) return;
             e.preventDefault();
             go(href);
           }, true);
@@ -290,7 +332,8 @@ html = html.replace(
 
           var wrap = function(fn){ return function(state, title, url){
             if (typeof url === "string") {
-              if (!isProxied(url)) return location.assign(PROXY_BASE + encodeURIComponent(toAbs(url)));
+              var norm = remapIfAppOrigin(url);
+              if (!isProxied(norm)) return location.assign(PROXY_BASE + encodeURIComponent(toAbs(norm)));
             }
             return fn.apply(this, arguments);
           }};

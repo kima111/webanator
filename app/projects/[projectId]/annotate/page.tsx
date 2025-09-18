@@ -45,8 +45,7 @@ export default async function AnnotatePage(props: PageProps) {
     .eq("id", projectId)
     .maybeSingle();
 
-  // Ensure the initial URL is proxied so it loads in an iframe
-  const proxiedInitial = initialUrl ? `/api/proxy?url=${encodeURIComponent(initialUrl)}` : "";
+  // Pass the external URL to the client shell; it will proxy when rendering
 
   return (
     <>
@@ -65,7 +64,7 @@ export default async function AnnotatePage(props: PageProps) {
         <div className="mb-2 text-xs text-muted-foreground py-2 text-center">
           Tip: Hold <kbd className="px-1 py-0.5 border rounded">Shift</kbd> and click inside the page to create a pin.
         </div>
-        <AnnotatorShell projectId={projectId} initialUrl={proxiedInitial} />
+  <AnnotatorShell projectId={projectId} initialUrl={initialUrl} />
       </div>
     </>
   );

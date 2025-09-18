@@ -14,9 +14,10 @@ type Props = {
     anchor: Point;
     text: string;
   }) => void;
+  onNavigated?: (externalUrl: string) => void; // <-- add this
 };
 
-export default function IframeOverlay({ url, annotations, onSelect, onCreateAt }: Props) {
+export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, onNavigated }: Props) {
   const [shiftHeld, setShiftHeld] = useState(false);
   // Listen for shift key to enable overlay pointer events
   useEffect(() => {
@@ -37,6 +38,16 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt }
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const [scroll, setScroll] = useState({ left: 0, top: 0 });
   const [contentSize, setContentSize] = useState({ width: 1, height: 1 });
+  // Ensure overlay releases if Shift state gets stuck (e.g., after prompt)
+  useEffect(() => {
+    const clear = () => setShiftHeld(false);
+    window.addEventListener("blur", clear);
+    window.addEventListener("pointerup", clear, true);
+    return () => {
+      window.removeEventListener("blur", clear);
+      window.removeEventListener("pointerup", clear, true);
+    };
+  }, []);
 
   // Listen for clicks coming from inside the iframe (if your injected script posts messages)
   useEffect(() => {
@@ -62,26 +73,51 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt }
     try {
       const base = typeof window !== "undefined" ? window.location.origin : "http://localhost";
       const u = new URL(raw, base);
-      let external = raw;
+      // Ignore non-http(s) schemes entirely
+      if (!/^https?:$/.test(u.protocol)) return "";
+      // Extra guard against protocol-relative about:blank like //about//blank
+      if (u.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(u.pathname)) return "";
 
+      let external = raw;
       // Unwrap proxied URLs like /api/proxy?url=<external>
       if (u.pathname.startsWith("/api/proxy")) {
         external = u.searchParams.get("url") ?? "";
       }
-
       if (!external) return "";
 
-      const e = new URL(external);
+  const e = new URL(external, base);
+      if (!/^https?:$/.test(e.protocol)) return "";
+  if (e.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(e.pathname)) return "";
       e.hash = "";
-      // Normalize trailing slash (keep "/" for root)
       e.pathname = e.pathname.replace(/\/+$/, "") || "/";
-      // Drop default ports
       const host = e.port && !["80", "443"].includes(e.port) ? `${e.hostname}:${e.port}` : e.hostname;
       return `${e.protocol}//${host}${e.pathname}${e.search}`;
     } catch {
-      return (raw.split("#")[0] ?? "").replace(/\/+$/, "") || "/";
+      return "";
     }
   }
+
+  // Notify parent when iframe navigates to a new URL (poll to handle SPA and link clicks)
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    let last = "";
+    const tick = () => {
+      try {
+        const proxied = iframe.contentWindow?.location?.href || iframe.src || "";
+        const external = canonicalize(proxied);
+        if (external && external !== last) {
+          last = external;
+          onNavigated?.(external);
+        }
+      } catch {
+        // Cross-origin guards; our proxy keeps it same-origin, so typically safe
+      }
+    };
+    tick();
+    const id = setInterval(tick, 400);
+    return () => clearInterval(id);
+  }, [onNavigated, src]);
 
   // Only show pins for the current annotated page
   const currentPage = canonicalize(src);
@@ -109,33 +145,65 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt }
     return () => clearInterval(interval);
   }, [src]);
 
+  // Also listen for Shift inside the iframe so overlay can capture clicks while focused there
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    let detach: (() => void) | null = null;
+
+    const attach = () => {
+      try {
+        const win = iframe.contentWindow;
+        if (!win) return;
+        const kd = (e: KeyboardEvent) => { if (e.key === "Shift") setShiftHeld(true); };
+        const ku = (e: KeyboardEvent) => { if (e.key === "Shift") setShiftHeld(false); };
+        win.addEventListener("keydown", kd);
+        win.addEventListener("keyup", ku);
+        detach = () => {
+          win.removeEventListener("keydown", kd);
+          win.removeEventListener("keyup", ku);
+        };
+      } catch {}
+    };
+
+    // Try immediately and also after a tick (iframe reloads)
+    attach();
+    const id = setInterval(attach, 300);
+    return () => {
+      clearInterval(id);
+      detach?.();
+    };
+  }, [src]);
+
   // Create a pin at click position (Shift+Click)
   function handleOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
     if (!onCreateAt) return;
-    if (!e.shiftKey) return; // require Shift to avoid blocking normal interaction
+    // Require Shift; use state to handle iframe focus cases
+    if (!shiftHeld && !e.shiftKey) return;
     const el = overlayRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const xPct = (e.clientX - rect.left) / rect.width;
     const yPct = (e.clientY - rect.top) / rect.height;
-    // Clamp to [0,1]
-    const anchor: Point = {
-      x: Math.max(0, Math.min(1, xPct)),
-      y: Math.max(0, Math.min(1, yPct)),
-    };
-    const text = (typeof window !== "undefined" && window.prompt("Add a comment for this pin")?.trim()) || "";
-    if (!text) return;
+
+    // Prompt or send empty text; AnnotatorShell will handle selector fallback to "point"
+    const text = window.prompt("Annotation text") ?? "";
+    if (!text.trim()) { setShiftHeld(false); return; }
+
     onCreateAt({
-      url: src,
-      selector: { type: "css", value: "" },
-      anchor,
+      url: src, // proxied URL; AnnotatorShell canonicalizes to external
+      selector: { type: "css", value: "" }, // no CSS selector; coordinates will be used
+      anchor: { x: xPct, y: yPct },
       text,
     });
+    // Release overlay immediately so browsing resumes
+    setShiftHeld(false);
   }
 
   return (
-    <div className="relative w-[95vw] h-[95vh] max-w-full max-h-full">
+    <div className="relative w-[95vw] h-[95vh] max-w-full max-h-full overflow-hidden">
       <iframe
+        key={src}
         ref={iframeRef}
         src={src}
         className="w-full h-full border-0"
