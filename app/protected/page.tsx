@@ -1,7 +1,7 @@
 // app/protected/page.tsx
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { InfoIcon, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -333,12 +333,12 @@ export default async function ProtectedPage() {
 
   return (
     <div className="flex-1 w-full flex flex-col gap-12">
-      <div className="w-full">
+      {/* <div className="w-full">
         <div className="bg-accent text-sm p-3 px-5 rounded-md text-foreground flex gap-3 items-center">
           <InfoIcon size="16" strokeWidth={2} />
           This is a protected page that you can only see as an authenticated user
         </div>
-      </div>
+      </div> */}
 
       {/* Add by URL */}
       <Card>
@@ -370,7 +370,7 @@ export default async function ProtectedPage() {
         <div className="flex flex-col gap-2 items-start">
           <h2 className="font-bold text-2xl">Projects</h2>
           <p className="text-sm text-muted-foreground">
-            Loaded from your Supabase table <code>projects</code>.
+            Loaded from your projects <code>projects</code>.
           </p>
           <p className="text-xs text-muted-foreground">
             Tip: Open a project to launch the annotator. To place an annotation, hold <kbd className="px-1 py-0.5 border rounded">Shift</kbd> and click on the page.
@@ -413,7 +413,7 @@ export default async function ProtectedPage() {
                     />
                     <form action={deleteProject}>
                       <input type="hidden" name="id" value={p.id} />
-                      <Button type="submit" size="sm" variant="destructive">
+                      <Button type="submit" size="sm" variant="destructive" className="m-4">
                         Delete
                       </Button>
                     </form>
