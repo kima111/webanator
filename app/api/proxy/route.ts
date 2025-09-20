@@ -306,19 +306,35 @@ html = html.replace(
           function go(u){
             if (!u) return;
             if (isAboutBlankLike(u)) return;
-            // Normalize and remap app-origin absolutes back to external origin
             var target = remapIfAppOrigin(u);
-            if (isProxied(target)) { location.assign(target); }
-            else { location.assign(PROXY_BASE + encodeURIComponent(toAbs(target))); }
+            var finalUrl = isProxied(target) ? target : (PROXY_BASE + encodeURIComponent(toAbs(target)));
+            if (finalUrl === location.href) return; // avoid reload loop on identical URL
+            location.assign(finalUrl);
           }
 
+          // Intercept SPA navigations with a gentle fallback (avoid fighting routers)
+          function isPlainLeftClick(evt) {
+            return evt.button === 0 && !evt.metaKey && !evt.ctrlKey && !evt.shiftKey && !evt.altKey;
+          }
           document.addEventListener("click", function (e) {
-            var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
-            if (!a) return;
-            var href = a.getAttribute("href");
-            if (!href || href.startsWith("#") || href.startsWith("javascript:") || href.startsWith("mailto:") || href.startsWith("about:") || isAboutBlankLike(href)) return;
-            e.preventDefault();
-            go(href);
+            try {
+              if (!isPlainLeftClick(e)) return;
+              var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+              if (!a) return;
+              var href = a.getAttribute("href");
+              if (!href || href.startsWith("#") || href.startsWith("javascript:") || href.startsWith("mailto:") || href.startsWith("about:") || isAboutBlankLike(href)) return;
+              var tgt = (a.getAttribute("target") || "").toLowerCase();
+              // Let SPA handle first; then fallback if URL didn't change shortly
+              var before = location.href;
+              var done = false;
+              var timer = setTimeout(function(){ if (done) return; var now = location.href; if (now === before || tgt && tgt !== "_self") { go(href); } }, 300);
+              var cancel = function(){ if (done) return; done = true; clearTimeout(timer); };
+              var onNav = function(){ cancel(); document.removeEventListener('popstate', onNav); document.removeEventListener('hashchange', onNav); };
+              document.addEventListener('popstate', onNav, { once: true });
+              document.addEventListener('hashchange', onNav, { once: true });
+              // Prevent browser default only if target is not _self (we navigate in-frame) otherwise allow SPA
+              if (tgt && tgt !== "_self") { e.preventDefault(); }
+            } catch(_){}
           }, true);
 
           document.addEventListener("submit", function (e) {
@@ -330,20 +346,174 @@ html = html.replace(
             } catch (_) {}
           }, true);
 
-          var wrap = function(fn){ return function(state, title, url){
-            if (typeof url === "string") {
-              var norm = remapIfAppOrigin(url);
-              if (!isProxied(norm)) return location.assign(PROXY_BASE + encodeURIComponent(toAbs(norm)));
-            }
-            return fn.apply(this, arguments);
-          }};
+          function toProxiedUrl(u) {
+            var norm = remapIfAppOrigin(u);
+            if (isProxied(norm)) return norm;
+            return PROXY_BASE + encodeURIComponent(toAbs(norm));
+          }
+          var wrap = function(fn){
+            return function(state, title, url){
+              try {
+                if (typeof url === "string") {
+                  var proxied = toProxiedUrl(url);
+                  if (proxied && proxied !== url) {
+                    // Rewrite the URL argument to its proxied equivalent and call the original
+                    return fn.call(this, state, title, proxied);
+                  }
+                }
+              } catch(_){}
+              return fn.apply(this, arguments);
+            };
+          };
           try { history.pushState = wrap(history.pushState); history.replaceState = wrap(history.replaceState); } catch (_) {}
-
           try { window.open = function(u){ go(u); }; } catch (_){}
+
+          // ---------- NEW: force all runtime resources to proxy against original origin ----------
+          var ASSET_EXT_RE = /\.(?:js|mjs|css|png|jpe?g|gif|webp|avif|svg|ico|bmp|webm|mp4|mp3|wav|ogg|woff2?|ttf|otf|map)(?:[?#].*)?$/i;
+
+          function toExternal(uStr) {
+            try {
+              // If caller gives app-origin absolute like /static/..., map it to external BASE origin
+              var probe = new URL(uStr, PROXY_ORIGIN);
+              if (probe.origin === PROXY_ORIGIN && probe.pathname.indexOf('/api/proxy') !== 0) {
+                var base = new URL(BASE);
+                return new URL(probe.pathname + probe.search, base.origin).toString();
+              }
+            } catch {}
+            try { return new URL(uStr, BASE).toString(); } catch { return uStr; }
+          }
+          function proxify(uStr, forceAsset) {
+            try {
+              var externalAbs = toAbs(toExternal(uStr));
+              if (isProxied(externalAbs)) return externalAbs;
+              var markAsset = forceAsset || ASSET_EXT_RE.test(externalAbs);
+              return PROXY_BASE + encodeURIComponent(externalAbs) + (markAsset ? "&asset=1" : "");
+            } catch { return uStr; }
+          }
+          function rewriteSrcSet(val) {
+            return String(val).split(",").map(function (s) { return s.trim(); }).filter(Boolean).map(function (part) {
+              var m = part.match(/^(\\S+)(\\s+\\S+)?$/);
+              if (!m) return part;
+              var url = m[1], desc = m[2] || "";
+              return proxify(url, true) + desc;
+            }).join(", ");
+          }
+
+          // Patch Element.setAttribute for src/href/srcset/imagesrcset with guards
+          (function () {
+            var orig = Element.prototype.setAttribute;
+            var inSet = false;
+            Element.prototype.setAttribute = function (name, value) {
+              if (inSet) return orig.call(this, name, value);
+              try {
+                var newVal = value;
+                if (name === "src" || name === "href") newVal = proxify(value, name === "src");
+                else if (name === "srcset" || name === "imagesrcset") newVal = rewriteSrcSet(value);
+                // Skip if unchanged
+                if (typeof newVal === 'string') {
+                  var cur = this.getAttribute ? this.getAttribute(name) : null;
+                  if (cur === newVal) return cur;
+                }
+                inSet = true;
+                var res = orig.call(this, name, newVal);
+                inSet = false;
+                return res;
+              } catch(_) { return orig.call(this, name, value); }
+            };
+          })();
+
+          // Patch common URL properties
+          function defineUrlProp(ctor, prop, asset) {
+            try {
+              var d = Object.getOwnPropertyDescriptor(ctor.prototype, prop);
+              if (!d || !d.set) return;
+              Object.defineProperty(ctor.prototype, prop, {
+                configurable: true,
+                get: d.get,
+                set: function (v) {
+                  try { d.set.call(this, proxify(v, asset)); } catch (_) { d.set.call(this, v); }
+                }
+              });
+            } catch {}
+          }
+          defineUrlProp(HTMLImageElement, "src", true);
+          defineUrlProp(HTMLScriptElement, "src", true);
+          defineUrlProp(HTMLLinkElement, "href", false);
+          defineUrlProp(HTMLSourceElement, "src", true);
+          defineUrlProp(HTMLMediaElement, "src", true);
+
+          // Patch fetch and XHR
+          (function () {
+            if (window.fetch) {
+              var ofetch = window.fetch;
+              window.fetch = function(input, init) {
+                try {
+                  var u = typeof input === "string" ? input : (input && input.url) || String(input);
+                  var fixed = proxify(u, false);
+                  if (typeof input === "string") return ofetch(fixed, init);
+                  if (input && input.url) return ofetch(new Request(fixed, input), init);
+                } catch {}
+                return ofetch(input, init);
+              };
+            }
+            if (window.XMLHttpRequest) {
+              var oopen = XMLHttpRequest.prototype.open;
+              XMLHttpRequest.prototype.open = function(method, url) {
+                try { url = proxify(url, false); } catch {}
+                return oopen.apply(this, [method, url].concat([].slice.call(arguments, 2)));
+              };
+            }
+          })();
+
+          // MutationObserver to fix dynamically added nodes/attributes
+          function fixAttrs(el) {
+            try {
+              if (!el || !el.getAttribute) return;
+              var v;
+              if (el.hasAttribute && el.hasAttribute("src")) {
+                v = el.getAttribute("src"); var p = proxify(v, true); if (p && p !== v) el.setAttribute("src", p);
+              }
+              if (el.hasAttribute && el.hasAttribute("href")) {
+                v = el.getAttribute("href"); var p2 = proxify(v, false); if (p2 && p2 !== v) el.setAttribute("href", p2);
+              }
+              if (el.hasAttribute && el.hasAttribute("srcset")) {
+                v = el.getAttribute("srcset"); var p3 = rewriteSrcSet(v); if (p3 && p3 !== v) el.setAttribute("srcset", p3);
+              }
+              if (el.hasAttribute && el.hasAttribute("imagesrcset")) {
+                v = el.getAttribute("imagesrcset"); var p4 = rewriteSrcSet(v); if (p4 && p4 !== v) el.setAttribute("imagesrcset", p4);
+              }
+              var xlink = el.getAttribute && el.getAttribute("xlink:href");
+              if (xlink) {
+                var px = proxify(xlink, true); if (px && px !== xlink) el.setAttribute("xlink:href", px);
+              }
+            } catch {}
+          }
+          var mo = new MutationObserver(function(muts) {
+            muts.forEach(function(m) {
+              if (m.type === "attributes" && m.target) {
+                fixAttrs(m.target);
+              } else if (m.type === "childList" && m.addedNodes) {
+                m.addedNodes.forEach(function(n) {
+                  if (n && n.nodeType === 1) {
+                    fixAttrs(n);
+                    if (n.querySelectorAll) {
+                      n.querySelectorAll("[src],[href],[srcset],[imagesrcset],[xlink\\\\:href]").forEach(fixAttrs);
+                    }
+                  }
+                });
+              }
+            });
+          });
+          try {
+            mo.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["src","href","srcset","imagesrcset","xlink:href"] });
+            // Initial sweep
+            document.querySelectorAll("[src],[href],[srcset],[imagesrcset],[xlink\\\\:href]").forEach(fixAttrs);
+          } catch {}
+
         })();
       </script>
     `;
-    html = html.replace(/<\/head>/i, `${injection}</head>`);
+  html = html.replace(/<\/head>/i, `${injection}</head>`);
 
     const headers = new Headers({
       "content-type": "text/html; charset=utf-8",
