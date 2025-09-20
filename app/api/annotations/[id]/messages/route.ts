@@ -1,3 +1,8 @@
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+type Ctx = { params: { id: string } }; // local helper for our casts
+
 export async function DELETE(_req: Request, context: unknown) {
   const { id } = await (context as Ctx).params;
   const url = new URL(_req.url);
@@ -10,20 +15,16 @@ export async function DELETE(_req: Request, context: unknown) {
   } = await supa.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  // Rely on RLS to authorize (editors/owners or author). Do not restrict to author here.
   const { error } = await supa
     .from("annotation_messages")
     .delete()
     .eq("id", messageId)
-    .eq("annotation_id", id)
-    .eq("author_id", user.id);
+    .eq("annotation_id", id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   return NextResponse.json({ success: true });
 }
-import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-
-type Ctx = { params: { id: string } }; // local helper for our casts
 
 export async function GET(_req: Request, context: unknown) {
   const { id } = await (context as Ctx).params;
