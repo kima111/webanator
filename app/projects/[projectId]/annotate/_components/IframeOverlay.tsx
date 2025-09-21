@@ -94,9 +94,9 @@ export default function IframeOverlay({
       }
       if (!external) return "";
 
-  const e = new URL(external, base);
+      const e = new URL(external, base);
       if (!/^https?:$/.test(e.protocol)) return "";
-  if (e.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(e.pathname)) return "";
+      if (e.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(e.pathname)) return "";
       e.hash = "";
       e.pathname = e.pathname.replace(/\/+$/, "") || "/";
       const host = e.port && !["80", "443"].includes(e.port) ? `${e.hostname}:${e.port}` : e.hostname;
@@ -246,12 +246,12 @@ export default function IframeOverlay({
   function getAnchor(a: Annotation): { x: number; y: number } | null {
     try {
       // If we have a CSS selector, resolve element and convert element-relative -> page-relative
-      const sel = (a as any)?.selector;
-      const elRel = (a as any)?.body?.anchor;
+      const sel = a.selector;
+      const elRel = a.body?.anchor;
       if (sel?.type === "css" && sel?.value && typeof elRel?.x === "number" && typeof elRel?.y === "number") {
         const iframe = iframeRef.current;
         const doc = iframe?.contentDocument || iframe?.contentWindow?.document;
-        const node = doc?.querySelector(String(sel.value));
+        const node = doc?.querySelector(sel.value);
         if (node && doc) {
           const nRect = node.getBoundingClientRect();
           const scrollLeft = doc.documentElement.scrollLeft || doc.body.scrollLeft || 0;
@@ -267,11 +267,11 @@ export default function IframeOverlay({
       }
 
       // Fallbacks (point selector or page-relative anchor)
-      if ((a as any)?.selector?.type === "point" && (a as any)?.selector?.value) {
-        const p = JSON.parse(String((a as any).selector.value));
+      if (a.selector?.type === "point" && a.selector?.value) {
+        const p = JSON.parse(a.selector.value);
         if (typeof p?.x === "number" && typeof p?.y === "number") return p;
       }
-      const p = (a as any)?.body?.anchor;
+      const p = a.body?.anchor;
       if (typeof p?.x === "number" && typeof p?.y === "number") return p;
     } catch {}
     return null;
@@ -372,17 +372,17 @@ export default function IframeOverlay({
                 e.stopPropagation();
                 if (a.id) onSelect(a.id);
               }}
-              title={(a as any)?.body?.text ?? "Annotation"}
+              title={a.body?.text ?? "Annotation"}
             >
               <div
                 className="sonar-pin"
-                style={
-                  {
-                    // feed CSS variables used by globals.css
-                    ["--pin-color" as any]: colors.dot,
-                    ["--pin-ring" as any]: colors.ring,
-                  } as React.CSSProperties
-                }
+                style={(() => {
+                  type CSSVarStyle = React.CSSProperties & { [K in `--pin-color` | `--pin-ring`]?: string };
+                  const cssVars: CSSVarStyle = {};
+                  cssVars["--pin-color"] = colors.dot;
+                  cssVars["--pin-ring"] = colors.ring;
+                  return cssVars;
+                })()}
               >
                 <span className="dot" />
                 <span className="ring r1" />

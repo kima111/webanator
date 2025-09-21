@@ -1,5 +1,5 @@
 export type AnnotationStatus = "open" | "resolved" | "archived";
-export type SelectorType = "page" | "css" | "range" | "manual";
+export type SelectorType = "page" | "css" | "range" | "manual" | "point";
 
 export interface Selector {
   type: SelectorType;
