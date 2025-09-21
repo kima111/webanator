@@ -82,3 +82,44 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Sonar pulse for annotation pins */
+@keyframes sonar-pulse {
+  0% {
+    transform: scale(0.4);
+    opacity: 0.6;
+  }
+  80% {
+    opacity: 0;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+.sonar-pin {
+  position: relative;
+  width: 14px;
+  height: 14px;
+}
+
+.sonar-pin .dot {
+  position: absolute;
+  inset: 0;
+  background: var(--pin-color, #ef4444); /* default red */
+  border-radius: 9999px;
+  box-shadow: 0 0 0 2px #fff;
+}
+
+.sonar-pin .ring {
+  position: absolute;
+  inset: -8px;
+  border-radius: 9999px;
+  border: 2px solid var(--pin-ring, rgba(239,68,68,0.45)); /* default red @45% */
+  transform: scale(0.4);
+  animation: sonar-pulse 2.4s ease-out infinite;
+}
+
+.sonar-pin .ring.r2 { animation-delay: 0.6s; }
+.sonar-pin .ring.r3 { animation-delay: 1.2s; }

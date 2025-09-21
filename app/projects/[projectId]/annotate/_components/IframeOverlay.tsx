@@ -14,10 +14,19 @@ type Props = {
     anchor: Point;
     text: string;
   }) => void;
-  onNavigated?: (externalUrl: string) => void; // <-- add this
+  onNavigated?: (externalUrl: string) => void;
+  /* NEW: active annotation id to highlight */
+  activeId?: string | null;
 };
 
-export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, onNavigated }: Props) {
+export default function IframeOverlay({
+  url,
+  annotations,
+  onSelect,
+  onCreateAt,
+  onNavigated,
+  activeId,
+}: Props) {
   const [shiftHeld, setShiftHeld] = useState(false);
   // Listen for shift key to enable overlay pointer events
   useEffect(() => {
@@ -85,9 +94,9 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
       }
       if (!external) return "";
 
-  const e = new URL(external, base);
+      const e = new URL(external, base);
       if (!/^https?:$/.test(e.protocol)) return "";
-  if (e.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(e.pathname)) return "";
+      if (e.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(e.pathname)) return "";
       e.hash = "";
       e.pathname = e.pathname.replace(/\/+$/, "") || "/";
       const host = e.port && !["80", "443"].includes(e.port) ? `${e.hostname}:${e.port}` : e.hostname;
@@ -122,6 +131,151 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
   // Only show pins for the current annotated page
   const currentPage = canonicalize(src);
   const visibleAnnotations = annotations.filter(a => canonicalize(a.url) === currentPage);
+
+  // Choose pin color by status; override to blue if active
+  function getPinColors(a: Annotation, isActive: boolean) {
+    if (isActive) {
+      return { dot: "#3b82f6", ring: "rgba(59,130,246,0.45)" }; // blue-500
+    }
+    switch (a.status) {
+      case "open":
+        return { dot: "#ef4444", ring: "rgba(239,68,68,0.45)" }; // red-500
+      case "resolved":
+        return { dot: "#10b981", ring: "rgba(16,185,129,0.45)" }; // emerald-500
+      case "archived":
+        return { dot: "#f59e0b", ring: "rgba(245,158,11,0.45)" }; // amber-500
+      default:
+        return { dot: "#6b7280", ring: "rgba(107,114,128,0.45)" }; // gray-500
+    }
+  }
+
+  // Build a reasonably stable CSS selector for an element
+  function buildSelector(el: Element): string {
+    // Prefer id if unique
+    if ((el as HTMLElement).id) {
+      const id = (el as HTMLElement).id;
+      try {
+        if (el.ownerDocument?.querySelectorAll(`#${CSS.escape(id)}`).length === 1) {
+          return `#${CSS.escape(id)}`;
+        }
+      } catch {}
+    }
+    // Build path with nth-of-type to reduce churn
+    const parts: string[] = [];
+    let node: Element | null = el;
+    while (node && node.nodeType === 1 && parts.length < 6) {
+      const tag = node.tagName.toLowerCase();
+      // stop at body/html
+      if (tag === "html" || tag === "body") {
+        parts.push(tag);
+        break;
+      }
+      // If node has a data-* hook or role that could help, you can extend this
+      let part = tag;
+      // nth-of-type
+      let idx = 1;
+      let sib = node.previousElementSibling;
+      while (sib) {
+        if (sib.tagName.toLowerCase() === tag) idx++;
+        sib = sib.previousElementSibling;
+      }
+      part += `:nth-of-type(${idx})`;
+      parts.push(part);
+      node = node.parentElement;
+    }
+    return parts.reverse().join(" > ");
+  }
+
+  // Create a pin at click position (Shift+Click) – element-anchored
+  function handleOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (!onCreateAt) return;
+    if (!shiftHeld && !e.shiftKey) return;
+
+    const el = overlayRef.current;
+    const iframe = iframeRef.current;
+    if (!el || !iframe) return;
+
+    // Page-relative position (fallback)
+    const rect = el.getBoundingClientRect();
+    const pageXPct = (e.clientX - rect.left) / rect.width;
+    const pageYPct = (e.clientY - rect.top) / rect.height;
+
+    // Try to resolve the element under the click inside the iframe viewport
+    const ifrRect = iframe.getBoundingClientRect();
+    const vx = e.clientX - ifrRect.left; // viewport coords inside iframe
+    const vy = e.clientY - ifrRect.top;
+
+    let selector: string | null = null;
+    let elXPct = pageXPct;
+    let elYPct = pageYPct;
+
+    try {
+      const doc = iframe.contentDocument || iframe.contentWindow?.document;
+      const hit = doc?.elementFromPoint(vx, vy) as Element | null;
+      if (hit && doc) {
+        selector = buildSelector(hit);
+        const hitRect = hit.getBoundingClientRect();
+        // normalize within the element box
+        elXPct = (vx - hitRect.left) / Math.max(hitRect.width || 1, 1);
+        elYPct = (vy - hitRect.top) / Math.max(hitRect.height || 1, 1);
+        // clamp
+        elXPct = Math.min(Math.max(elXPct, 0), 1);
+        elYPct = Math.min(Math.max(elYPct, 0), 1);
+      }
+    } catch {
+      // ignore, will use page-relative fallback
+    }
+
+    const text = window.prompt("Annotation text") ?? "";
+    if (!text.trim()) {
+      setShiftHeld(false);
+      return;
+    }
+
+    onCreateAt({
+      url: src, // proxied; server canonicalizes to external
+      selector: selector ? { type: "css", value: selector } : { type: "css", value: "" },
+      // Store element-relative if we have a selector; otherwise keep page-relative
+      anchor: { x: selector ? elXPct : pageXPct, y: selector ? elYPct : pageYPct },
+      text,
+    });
+
+    setShiftHeld(false);
+  }
+
+  function getAnchor(a: Annotation): { x: number; y: number } | null {
+    try {
+      // If we have a CSS selector, resolve element and convert element-relative -> page-relative
+      const sel = a.selector;
+      const elRel = a.body?.anchor;
+      if (sel?.type === "css" && sel?.value && typeof elRel?.x === "number" && typeof elRel?.y === "number") {
+        const iframe = iframeRef.current;
+        const doc = iframe?.contentDocument || iframe?.contentWindow?.document;
+        const node = doc?.querySelector(sel.value);
+        if (node && doc) {
+          const nRect = node.getBoundingClientRect();
+          const scrollLeft = doc.documentElement.scrollLeft || doc.body.scrollLeft || 0;
+          const scrollTop = doc.documentElement.scrollTop || doc.body.scrollTop || 0;
+          const absX = nRect.left + scrollLeft + nRect.width * elRel.x;
+          const absY = nRect.top + scrollTop + nRect.height * elRel.y;
+          // convert to page-relative percentages expected by renderer
+          return {
+            x: absX / Math.max(contentSize.width || 1, 1),
+            y: absY / Math.max(contentSize.height || 1, 1),
+          };
+        }
+      }
+
+      // Fallbacks (point selector or page-relative anchor)
+      if (a.selector?.type === "point" && a.selector?.value) {
+        const p = JSON.parse(a.selector.value);
+        if (typeof p?.x === "number" && typeof p?.y === "number") return p;
+      }
+      const p = a.body?.anchor;
+      if (typeof p?.x === "number" && typeof p?.y === "number") return p;
+    } catch {}
+    return null;
+  }
 
   // Sync overlay with iframe scroll and content size
   useEffect(() => {
@@ -175,35 +329,9 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
     };
   }, [src]);
 
-  // Create a pin at click position (Shift+Click)
-  function handleOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (!onCreateAt) return;
-    // Require Shift; use state to handle iframe focus cases
-    if (!shiftHeld && !e.shiftKey) return;
-    const el = overlayRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const xPct = (e.clientX - rect.left) / rect.width;
-    const yPct = (e.clientY - rect.top) / rect.height;
-
-    // Prompt or send empty text; AnnotatorShell will handle selector fallback to "point"
-    const text = window.prompt("Annotation text") ?? "";
-    if (!text.trim()) { setShiftHeld(false); return; }
-
-    onCreateAt({
-      url: src, // proxied URL; AnnotatorShell canonicalizes to external
-      selector: { type: "css", value: "" }, // no CSS selector; coordinates will be used
-      anchor: { x: xPct, y: yPct },
-      text,
-    });
-    // Release overlay immediately so browsing resumes
-    setShiftHeld(false);
-  }
-
   return (
-    <div className="relative w-[95vw] h-[95vh] max-w-full max-h-full overflow-hidden">
+    <div className="relative w-[95vw] h-[95vh] max-w-full max-h-full">
       <iframe
-        key={src}
         ref={iframeRef}
         src={src}
         className="w-full h-full border-0"
@@ -216,26 +344,52 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
           width: contentSize.width,
           height: contentSize.height,
           pointerEvents: shiftHeld ? "auto" : "none",
-          transform: `translate(${-scroll.left}px, ${-scroll.top}px)`
+          transform: `translate(${-scroll.left}px, ${-scroll.top}px)`,
         }}
         onClick={handleOverlayClick}
         title="Shift+Click to add a pin (hold Shift to enable overlay)"
       >
-        {visibleAnnotations.map((a: Annotation) => {
-          const anchor = a.body?.anchor as Point | undefined;
-          const topPx = anchor ? anchor.y * contentSize.height : 20;
-          const leftPx = anchor ? anchor.x * contentSize.width : 20;
+        {/* Pins with sonar animation */}
+        {visibleAnnotations.map((a) => {
+          const anchor = getAnchor(a);
+          if (!anchor) return null;
+          const left = anchor.x * contentSize.width;
+          const top = anchor.y * contentSize.height;
+          const isActive = !!activeId && a.id === activeId;
+          const colors = getPinColors(a, isActive);
+
           return (
             <div
               key={a.id}
-              className="absolute bg-red-500 rounded-full w-3 h-3"
-              style={{ top: topPx, left: leftPx, transform: "translate(-50%, -50%)", cursor: "pointer" }}
-              onClick={(ev) => {
-                ev.stopPropagation();
-                onSelect(a.id);
+              className="absolute"
+              style={{
+                left,
+                top,
+                transform: "translate(-50%, -50%)",
+                pointerEvents: "auto",
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (a.id) onSelect(a.id);
               }}
               title={a.body?.text ?? "Annotation"}
-            />
+            >
+              <div
+                className="sonar-pin"
+                style={(() => {
+                  type CSSVarStyle = React.CSSProperties & { [K in `--pin-color` | `--pin-ring`]?: string };
+                  const cssVars: CSSVarStyle = {};
+                  cssVars["--pin-color"] = colors.dot;
+                  cssVars["--pin-ring"] = colors.ring;
+                  return cssVars;
+                })()}
+              >
+                <span className="dot" />
+                <span className="ring r1" />
+                <span className="ring r2" />
+                <span className="ring r3" />
+              </div>
+            </div>
           );
         })}
       </div>

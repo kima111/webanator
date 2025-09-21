@@ -177,7 +177,9 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
               annotations={annotations}
               onSelect={setActiveAnnotationId}
               onCreateAt={handleCreateAt}
-              onNavigated={handleIframeNavigated} // <-- reflect in-iframe navigation
+              onNavigated={handleIframeNavigated}
+              /* NEW: pass the active id so the pin can be highlighted */
+              activeId={activeAnnotationId}
             />
           </div>
         </div>
