@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import NextImage from "next/image";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export default function ProfileForm({
   email,
@@ -21,6 +23,7 @@ export default function ProfileForm({
   lastName: string;
   avatarUrl?: string;
 }) {
+  const router = useRouter();
   const [firstName, setFirstName] = useState(initialFirst);
   const [lastName, setLastName] = useState(initialLast);
   const [saving, setSaving] = useState(false);
@@ -40,7 +43,9 @@ export default function ProfileForm({
   const PREVIEW_SIZE = 320;
   const CANVAS_SIZE = 512;
   const [scale, setScale] = useState(1.0);
+  const [maxScale, setMaxScale] = useState(6);
   const [offset, setOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [pixelSnap, setPixelSnap] = useState(false);
   const dragRef = useRef<{ startX: number; startY: number; startOffX: number; startOffY: number } | null>(null);
 
   async function onSave(e: React.FormEvent) {
@@ -89,7 +94,14 @@ export default function ProfileForm({
     const img = new Image();
     img.onload = () => {
       setImgEl(img);
-      setImgNatural({ w: img.naturalWidth, h: img.naturalHeight });
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  setImgNatural({ w, h });
+  // Cap zoom so exported image never upscales beyond native resolution
+  const nativeMaxScale = Math.max(w, h) / CANVAS_SIZE;
+  setMaxScale(Math.max(0.02, nativeMaxScale));
+  setScale(1);
+  setOffset({ x: 0, y: 0 });
     };
     img.src = cropSrc;
     return () => {
@@ -101,8 +113,10 @@ export default function ProfileForm({
   function clampOffset(nx: number, ny: number, s: number): { x: number; y: number } {
     const w = imgNatural?.w ?? 0;
     const h = imgNatural?.h ?? 0;
-    const dispW = w * s;
-    const dispH = h * s;
+    const C = PREVIEW_SIZE;
+    const base = Math.min(C / (w || 1), C / (h || 1));
+    const dispW = w * base * s;
+    const dispH = h * base * s;
     const limitX = Math.abs(dispW - PREVIEW_SIZE) / 2;
     const limitY = Math.abs(dispH - PREVIEW_SIZE) / 2;
     return { x: Math.min(Math.max(nx, -limitX), limitX), y: Math.min(Math.max(ny, -limitY), limitY) };
@@ -125,24 +139,47 @@ export default function ProfileForm({
   }
 
   function onScaleChange(v: number) {
-    const clamped = clampOffset(offset.x, offset.y, v);
-    setScale(v);
+    let next = Math.max(0.02, Math.min(maxScale, v));
+    if (pixelSnap && imgNatural) {
+      const C = PREVIEW_SIZE;
+      const base = Math.min(C / imgNatural.w, C / imgNatural.h);
+      const eff = base * next; // css px per source px
+      const snapped = Math.max(1, Math.round(eff));
+      next = Math.min(maxScale, snapped / base);
+    }
+    const clamped = clampOffset(offset.x, offset.y, next);
+    setScale(next);
     setOffset(clamped);
   }
 
   function fitContain() {
     if (!imgNatural) return;
-    const s = Math.min(PREVIEW_SIZE / imgNatural.w, PREVIEW_SIZE / imgNatural.h);
-    const clamped = Math.max(0.02, Math.min(6, s));
-    setScale(clamped);
+    let next = Math.min(1, maxScale);
+    if (pixelSnap && imgNatural) {
+      const C = PREVIEW_SIZE;
+      const base = Math.min(C / imgNatural.w, C / imgNatural.h);
+      const eff = base * next;
+      const snapped = Math.max(1, Math.round(eff));
+      next = Math.min(maxScale, snapped / base);
+    }
+    setScale(next);
     setOffset({ x: 0, y: 0 });
   }
 
   function fitCover() {
     if (!imgNatural) return;
-    const s = Math.max(PREVIEW_SIZE / imgNatural.w, PREVIEW_SIZE / imgNatural.h);
-    const clamped = Math.max(0.02, Math.min(6, s));
-    setScale(clamped);
+    const contain = Math.min(PREVIEW_SIZE / imgNatural.w, PREVIEW_SIZE / imgNatural.h);
+    const cover = Math.max(PREVIEW_SIZE / imgNatural.w, PREVIEW_SIZE / imgNatural.h);
+    const factor = cover / contain;
+    let next = Math.min(factor, maxScale);
+    if (pixelSnap && imgNatural) {
+      const C = PREVIEW_SIZE;
+      const base = Math.min(C / imgNatural.w, C / imgNatural.h);
+      const eff = base * next;
+      const snapped = Math.max(1, Math.round(eff));
+      next = Math.min(maxScale, snapped / base);
+    }
+    setScale(next);
     setOffset({ x: 0, y: 0 });
   }
 
@@ -160,26 +197,30 @@ export default function ProfileForm({
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("Canvas not supported");
 
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(CANVAS_SIZE / 2, CANVAS_SIZE / 2, CANVAS_SIZE / 2, 0, Math.PI * 2);
-      ctx.closePath();
-      ctx.clip();
+  // Render using a single transform that mirrors the preview positioning
+  const C = PREVIEW_SIZE;
+  const w = imgNatural.w;
+  const h = imgNatural.h;
+  const base = Math.min(C / w, C / h);
+  const eff = base * scale;
+  const dispW = w * eff;
+  const dispH = h * eff;
+  const left = C / 2 - dispW / 2 + offset.x;
+  const top = C / 2 - dispH / 2 + offset.y;
 
-      const C = PREVIEW_SIZE;
-      const s = scale;
-      const w = imgNatural.w;
-      const h = imgNatural.h;
-      const dispW = w * s;
-      const dispH = h * s;
-      const TLx = C / 2 - dispW / 2 + offset.x;
-      const TLy = C / 2 - dispH / 2 + offset.y;
-      const sx = (0 - TLx) / s;
-      const sy = (0 - TLy) / s;
-      const sSize = C / s;
+  const k = CANVAS_SIZE / C; // canvas-per-preview-unit
 
-      ctx.drawImage(imgEl, sx, sy, sSize, sSize, 0, 0, CANVAS_SIZE, CANVAS_SIZE);
-      ctx.restore();
+  ctx.save();
+  // Clip in canvas coordinates
+  ctx.beginPath();
+  ctx.arc(CANVAS_SIZE / 2, CANVAS_SIZE / 2, CANVAS_SIZE / 2, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  // Map image coordinates (0..w, 0..h) to canvas using combined transform
+  // First map image->preview (scale eff, translate left/top), then preview->canvas (scale k)
+  ctx.setTransform(eff * k, 0, 0, eff * k, left * k, top * k);
+  ctx.drawImage(imgEl, 0, 0);
+  ctx.restore();
 
       const blob: Blob = await new Promise((resolve, reject) =>
         canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Failed to export image"))), "image/png", 0.92)
@@ -221,6 +262,8 @@ export default function ProfileForm({
       setMsg("Profile photo updated");
       setCropOpen(false);
       setCropSrc(null);
+      // Ensure server-rendered navbar picks up new avatar
+      router.refresh();
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Upload failed");
     } finally {
@@ -263,42 +306,74 @@ export default function ProfileForm({
           </DialogHeader>
           <div className="grid gap-4">
             <div
-              className="mx-auto rounded-full overflow-hidden border relative"
+              className="mx-auto rounded-full overflow-hidden relative"
               style={{ width: PREVIEW_SIZE, height: PREVIEW_SIZE, touchAction: "none" }}
               onPointerDown={onStartDrag}
               onPointerMove={onDrag}
               onPointerUp={onEndDrag}
               onPointerCancel={onEndDrag}
             >
-              {cropSrc ? (
-                <NextImage
-                  src={cropSrc}
-                  alt="Crop preview"
-                  draggable={false}
-                  unoptimized
-                  fill
-                  sizes={`${PREVIEW_SIZE}px`}
-                  className="absolute top-1/2 left-1/2 select-none"
-                  style={{
-                    transform: `translate(-50%, -50%) translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
-                    transformOrigin: "center center",
-                    willChange: "transform",
-                    objectFit: "contain",
-                  }}
-                />
-              ) : null}
+              {cropSrc && imgNatural ? (() => {
+                const C = PREVIEW_SIZE;
+                const w = imgNatural.w;
+                const h = imgNatural.h;
+                const base = Math.min(C / w, C / h);
+                const eff = base * scale;
+                let dispW = w * eff;
+                let dispH = h * eff;
+                let left = C / 2 - dispW / 2 + offset.x;
+                let top = C / 2 - dispH / 2 + offset.y;
+                if (pixelSnap) {
+                  dispW = Math.round(dispW);
+                  dispH = Math.round(dispH);
+                  left = Math.round(left);
+                  top = Math.round(top);
+                }
+                return (
+                  <img
+                    src={cropSrc}
+                    alt="Crop preview"
+                    draggable={false}
+                    style={{
+                      position: "absolute",
+                      left,
+                      top,
+                      width: dispW,
+                      height: dispH,
+                      userSelect: "none",
+                      imageRendering: pixelSnap ? "pixelated" : "auto",
+                    }}
+                  />
+                );
+              })() : null}
+              {/* Grid overlay for alignment */}
+              <div
+                className="pointer-events-none absolute inset-0 rounded-full"
+                style={{
+                  backgroundImage:
+                    "repeating-linear-gradient(0deg, rgba(255,255,255,0.15) 0, rgba(255,255,255,0.15) 1px, transparent 1px, transparent 16px), repeating-linear-gradient(90deg, rgba(255,255,255,0.15) 0, rgba(255,255,255,0.15) 1px, transparent 1px, transparent 16px)",
+                }}
+              />
+              {/* Visual ring that doesn't affect layout */}
+              <div className="pointer-events-none absolute inset-0 rounded-full border" />
             </div>
             <div className="flex items-center gap-3">
               <Label className="w-16">Zoom</Label>
               <input
                 type="range"
                 min={0.02}
-                max={6}
+                max={Math.max(0.02, maxScale)}
                 step={0.01}
                 value={scale}
                 onChange={(e) => onScaleChange(parseFloat(e.target.value))}
                 className="flex-1"
               />
+              <div className="flex items-center gap-2">
+                <Checkbox id="pixel-snap" checked={pixelSnap} onCheckedChange={(v) => setPixelSnap(Boolean(v))} />
+                <Label htmlFor="pixel-snap" className="text-xs select-none">
+                  Pixel snap
+                </Label>
+              </div>
             </div>
             <div className="flex items-center justify-end gap-2">
               <Button type="button" variant="ghost" size="sm" onClick={fitContain} disabled={uploading || !imgNatural}>
@@ -309,6 +384,18 @@ export default function ProfileForm({
               </Button>
               <Button type="button" variant="outline" size="sm" onClick={centerImage} disabled={uploading}>
                 Center
+              </Button>
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                onClick={() => {
+                  setScale(Math.min(1, maxScale));
+                  setOffset({ x: 0, y: 0 });
+                }}
+                disabled={uploading || !imgNatural}
+              >
+                Reset
               </Button>
             </div>
           </div>
