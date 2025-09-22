@@ -1,0 +1,47 @@
+   ▲ Next.js 15.5.3
+   - Environments: .env.local
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully in 2.1s
+   Linting and checking validity of types ...
+   Collecting page data ...
+   Generating static pages (0/19) ...
+   Generating static pages (4/19) 
+   Generating static pages (9/19) 
+   Generating static pages (14/19) 
+ ✓ Generating static pages (19/19)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                                 Size  First Load JS
+┌ ƒ /                                    4.05 kB         195 kB
+├ ○ /_not-found                            993 B         103 kB
+├ ƒ /account                             3.21 kB         178 kB
+├ ƒ /api/admin/init-avatars                146 B         102 kB
+├ ƒ /api/annotations                       146 B         102 kB
+├ ƒ /api/annotations/[id]                  146 B         102 kB
+├ ƒ /api/annotations/[id]/messages         146 B         102 kB
+├ ƒ /api/projects/create                   146 B         102 kB
+├ ƒ /api/proxy                             146 B         102 kB
+├ ƒ /api/users/info                        146 B         102 kB
+├ ƒ /auth/confirm                          146 B         102 kB
+├ ƒ /auth/error                            146 B         102 kB
+├ ○ /auth/forgot-password                2.49 kB         159 kB
+├ ○ /auth/login                          2.52 kB         159 kB
+├ ○ /auth/sign-up                        2.73 kB         160 kB
+├ ○ /auth/sign-up-success                  146 B         102 kB
+├ ○ /auth/update-password                2.34 kB         156 kB
+├ ○ /projects                              296 B         102 kB
+├ ƒ /projects/[projectId]/annotate          7 kB         169 kB
+└ ƒ /protected                           1.89 kB         129 kB
++ First Load JS shared by all             102 kB
+  ├ chunks/255-40634877ae3e8e9d.js       45.7 kB
+  ├ chunks/4bd1b696-c023c6e3521b1417.js  54.2 kB
+  └ other shared chunks (total)          1.93 kB
+
+
+ƒ Middleware                               70 kB
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

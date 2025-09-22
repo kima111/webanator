@@ -6,7 +6,7 @@ export function createAdminClient() {
 
   if (!url || !serviceKey) {
     throw new Error(
-      "Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY for admin client",
+      "Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY. Set these env vars to enable admin operations (like creating the avatars bucket)."
     );
   }
 

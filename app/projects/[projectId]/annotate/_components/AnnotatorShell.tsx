@@ -12,7 +12,7 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
   const lastExternalOriginRef = useRef<string>("");
   const suppressUntilRef = useRef<string | null>(null);
 
-  const { annotations, createAnnotation } = useAnnotationRealtime(projectId);
+  const { annotations, createAnnotation, announceCreated } = useAnnotationRealtime(projectId);
   const { messages, sendMessage, subscribeTo, deleteMessage } = useMessagesRealtime();
 
   useEffect(() => {
@@ -135,8 +135,9 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
       console.error("Annotation insert failed", err?.error ?? res.statusText);
       return;
     }
-    const data = await res.json().catch(() => ({}));
-    await createAnnotation();
+  const data = await res.json().catch(() => ({}));
+  await createAnnotation();
+  announceCreated();
     if (data?.id) setActiveAnnotationId(data.id);
   }
 

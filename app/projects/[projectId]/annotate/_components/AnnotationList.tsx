@@ -1,7 +1,9 @@
 "use client";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import NextImage from "next/image";
 
 const STATUS_OPTIONS = [
   { value: "open", label: "Open" },
@@ -16,8 +18,10 @@ type Ann = {
     text?: string;
     display_name?: string;
     time_of_day?: string;
+    author_avatar_url?: string;
   } | null;
   status?: string | null;
+  created_by?: string;
 };
 
 export default function AnnotationList({
@@ -35,9 +39,54 @@ export default function AnnotationList({
   onNavigateToUrl?: (url: string) => void;
   refresh?: () => void; // <-- add this prop
 }) {
-  const safeItems = Array.isArray(items) ? items : [];
+  const safeItems = useMemo(() => (Array.isArray(items) ? items : []), [items]);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [updating, setUpdating] = useState<string | null>(null);
+  const [avatarByUserId, setAvatarByUserId] = useState<Record<string, string>>({});
+  const fetchingRef = useRef(false);
+
+  // Backfill avatars for annotations that don't have author_avatar_url but might have creator id later
+  // This assumes your annotations row also contains created_by; if not passed to the client list, skip.
+  const missingUserIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const a of safeItems) {
+      const hasAvatar = Boolean(a.body?.author_avatar_url);
+      const uid = a.created_by;
+      if (!hasAvatar && typeof uid === "string" && !avatarByUserId[uid]) {
+        ids.add(uid);
+      }
+    }
+    return Array.from(ids);
+  }, [safeItems, avatarByUserId]);
+
+  useEffect(() => {
+    if (fetchingRef.current) return;
+    if (!missingUserIds.length) return;
+    fetchingRef.current = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/users/info", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ids: missingUserIds }),
+        });
+        const out = (await res.json()) as {
+          users?: Array<{ id: string; avatar_url?: string | null }>;
+        };
+        const next: Record<string, string> = {};
+        for (const u of out.users ?? []) {
+          if (u.id && u.avatar_url) next[u.id] = u.avatar_url;
+        }
+        if (Object.keys(next).length) {
+          setAvatarByUserId((prev) => ({ ...prev, ...next }));
+        }
+      } catch {
+        // ignore
+      } finally {
+        fetchingRef.current = false;
+      }
+    })();
+  }, [missingUserIds]);
 
   async function handleDelete(id?: string) {
     if (!id) return;
@@ -87,6 +136,12 @@ export default function AnnotationList({
           normalizeUrl(a.url) === normalizedCurrent ||
           decodeURIComponent(normalizeUrl(a.url)) === normalizedCurrent;
 
+  const displayName = a.body?.display_name || "Unknown";
+  const avatarFromBody = a.body?.author_avatar_url as string | undefined;
+  const uid = a.created_by as string | undefined;
+  const avatarFromCache = uid ? avatarByUserId[uid] : undefined;
+  const avatarUrl = avatarFromBody || avatarFromCache || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName)}`;
+
         return (
           <div
             key={a.id ?? idx}
@@ -95,10 +150,22 @@ export default function AnnotationList({
               a.id && activeId === a.id && "bg-muted"
             )}
           >
+            {avatarUrl ? (
+              <NextImage
+                src={avatarUrl}
+                alt={displayName}
+                width={24}
+                height={24}
+                unoptimized
+                className="h-6 w-6 rounded-full border object-cover"
+              />
+            ) : (
+              <Skeleton className="h-6 w-6 rounded-full" />
+            )}
             <div className="flex-1 cursor-pointer" onClick={() => a.id && onSelect?.(a.id)}>
               <div className="text-sm font-medium truncate">{a.body?.text ?? "(no text)"}</div>
               <div className="text-xs text-muted-foreground">
-                {a.body?.display_name ?? "Unknown"}
+                {displayName}
                 {a.body?.time_of_day ? ` • ${a.body.time_of_day}` : ""}
               </div>
               <div className="text-xs text-muted-foreground">

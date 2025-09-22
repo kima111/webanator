@@ -156,17 +156,27 @@ export async function POST(req: Request) {
     const now = new Date();
     const timeOfDay = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     // Try to use username, fallback to first/last name, fallback to email
-    const meta = user.user_metadata || {};
+    const meta = (user.user_metadata || {}) as Partial<{
+      username: string;
+      first_name: string;
+      last_name: string;
+      avatar_url: string;
+    }>;
     const displayName =
       meta.username ||
       [meta.first_name, meta.last_name].filter(Boolean).join(" ") ||
       user.email ||
       "Unknown";
 
+    const nameSeed = displayName;
+  const avatarFromMeta = typeof meta.avatar_url === "string" && meta.avatar_url.length > 0 ? meta.avatar_url : undefined;
+    const authorAvatarUrl = avatarFromMeta || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(nameSeed)}`;
+
     const annotationBody = {
       ...body,
       display_name: displayName,
       time_of_day: timeOfDay,
+      author_avatar_url: authorAvatarUrl,
     };
 
     const { data, error } = await supabase

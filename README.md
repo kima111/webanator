@@ -99,6 +99,12 @@ If you wish to just develop locally and not deploy to Vercel, [follow the steps 
 - Open Supabase Dashboard → SQL editor and run the contents of `db/migrations.sql`.
   - This adds `role` and `joined_at` to `project_members`, creates `project_comments`, enables RLS, and installs role-aware policies.
 
+## Enable Realtime for annotations/messages
+
+- In Supabase Dashboard → SQL editor, run `db/realtime.sql` to enable realtime on the `annotations` and `annotation_messages` tables.
+  - This sets `REPLICA IDENTITY FULL` and adds both tables to the `supabase_realtime` publication so INSERT/UPDATE/DELETE events stream to clients.
+  - If you see warnings about tables already in the publication, you can ignore them.
+
 ## Auth email configuration (Supabase SMTP)
 
 - Supabase Dashboard → Authentication → Email → SMTP: add your SMTP credentials.
