@@ -486,3 +486,103 @@ BEGIN
   END IF;
 END
 $$;
+
+-- Enable RLS + policies for annotation_messages (required for Realtime delivery)
+DO $$
+BEGIN
+  IF to_regclass('public.annotation_messages') IS NOT NULL THEN
+    -- Enable RLS
+    EXECUTE 'ALTER TABLE public.annotation_messages ENABLE ROW LEVEL SECURITY';
+
+    -- SELECT: any project member can read messages for annotations in their projects
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_policies
+      WHERE schemaname='public' AND tablename='annotation_messages'
+        AND policyname='annotation_messages_select_if_member'
+    ) THEN
+      CREATE POLICY annotation_messages_select_if_member
+        ON public.annotation_messages FOR SELECT
+        USING (
+          EXISTS (
+            SELECT 1
+            FROM public.annotations a
+            JOIN public.project_members pm ON pm.project_id = a.project_id
+            WHERE a.id = annotation_messages.annotation_id
+              AND pm.user_id = auth.uid()
+          )
+        );
+    END IF;
+
+    -- INSERT: editors or owners can add messages; must insert as themselves
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_policies
+      WHERE schemaname='public' AND tablename='annotation_messages'
+        AND policyname='annotation_messages_insert_if_editor_or_owner'
+    ) THEN
+      CREATE POLICY annotation_messages_insert_if_editor_or_owner
+        ON public.annotation_messages FOR INSERT
+        WITH CHECK (
+          author_id = auth.uid()
+          AND EXISTS (
+            SELECT 1
+            FROM public.annotations a
+            JOIN public.project_members pm ON pm.project_id = a.project_id
+            WHERE a.id = annotation_messages.annotation_id
+              AND pm.user_id = auth.uid()
+              AND pm.role IN ('editor','owner')
+          )
+        );
+    END IF;
+
+    -- UPDATE: owner can edit any; editor can edit their own
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_policies
+      WHERE schemaname='public' AND tablename='annotation_messages'
+        AND policyname='annotation_messages_update_if_owner_or_self_editor'
+    ) THEN
+      CREATE POLICY annotation_messages_update_if_owner_or_self_editor
+        ON public.annotation_messages FOR UPDATE
+        USING (
+          EXISTS (
+            SELECT 1
+            FROM public.annotations a
+            JOIN public.project_members pm ON pm.project_id = a.project_id
+            WHERE a.id = annotation_messages.annotation_id
+              AND pm.user_id = auth.uid()
+              AND (pm.role = 'owner' OR (pm.role = 'editor' AND author_id = auth.uid()))
+          )
+        )
+        WITH CHECK (
+          EXISTS (
+            SELECT 1
+            FROM public.annotations a
+            JOIN public.project_members pm ON pm.project_id = a.project_id
+            WHERE a.id = annotation_messages.annotation_id
+              AND pm.user_id = auth.uid()
+              AND (pm.role = 'owner' OR (pm.role = 'editor' AND author_id = auth.uid()))
+          )
+        );
+    END IF;
+
+    -- DELETE: owner can delete any; editor can delete own
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_policies
+      WHERE schemaname='public' AND tablename='annotation_messages'
+        AND policyname='annotation_messages_delete_if_owner_or_self_editor'
+    ) THEN
+      CREATE POLICY annotation_messages_delete_if_owner_or_self_editor
+        ON public.annotation_messages FOR DELETE
+        USING (
+          EXISTS (
+            SELECT 1
+            FROM public.annotations a
+            JOIN public.project_members pm ON pm.project_id = a.project_id
+            WHERE a.id = annotation_messages.annotation_id
+              AND pm.user_id = auth.uid()
+              AND (pm.role = 'owner' OR (pm.role = 'editor' AND author_id = auth.uid()))
+          )
+        );
+    END IF;
+  END IF;
+END
+$$;

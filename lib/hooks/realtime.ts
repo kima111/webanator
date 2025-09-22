@@ -6,6 +6,8 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 
 export function useAnnotationRealtime(projectId: string, url?: string) {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
+  const channelRef = useRef<ReturnType<ReturnType<typeof createClient>["channel"]> | null>(null);
 
   const fetchAll = useCallback(async () => {
     const qs = new URLSearchParams({ projectId, ...(url ? { url } : {}) }).toString();
@@ -37,31 +39,66 @@ export function useAnnotationRealtime(projectId: string, url?: string) {
 
   // --- Realtime subscription ---
   useEffect(() => {
-    const supabase = createClient();
+    if (!supabaseRef.current) supabaseRef.current = createClient();
+    const supabase = supabaseRef.current;
+
+    // Tear down any existing
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current);
+      channelRef.current = null;
+    }
+
     const channel = supabase
-      .channel("annotations:global")
+      .channel("annotations:project")
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "annotations",
-          // No filter!
         },
         (payload) => {
-          console.log("Supabase Realtime event (annotations):", payload);
-          fetchAll();
+          const newRow = (payload as { new?: { project_id?: string } }).new;
+          const oldRow = (payload as { old?: { project_id?: string } }).old;
+          const pid = newRow?.project_id || oldRow?.project_id;
+          if (!pid || pid === projectId) {
+            console.log("Supabase Realtime event (annotations):", payload);
+            fetchAll();
+          }
         }
       )
-      .subscribe();
+      // Broadcast fallback for inserts from clients
+      .on(
+        "broadcast",
+        { event: "annotation_created" },
+        (p: { payload?: { project_id?: string } }) => {
+          const pid = p?.payload?.project_id;
+          if (!pid || pid === projectId) {
+            console.log("Broadcast event (annotation_created)", p);
+            fetchAll();
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log("Supabase channel (annotations) status:", status);
+      });
+
+    channelRef.current = channel;
 
     return () => {
       supabase.removeChannel(channel);
+      channelRef.current = null;
     };
-  }, [fetchAll]);
+  }, [fetchAll, projectId]);
 
   // keep signature stable with previous usage
-  return { annotations, createAnnotation: fetchAll };
+  const announceCreated = useCallback(() => {
+    try {
+      channelRef.current?.send({ type: "broadcast", event: "annotation_created", payload: { project_id: projectId } });
+    } catch {}
+  }, [projectId]);
+
+  return { annotations, createAnnotation: fetchAll, announceCreated };
 }
 
 // Make messages realtime per-annotation
@@ -109,7 +146,11 @@ export function useMessagesRealtime() {
         { event: "*", schema: "public", table: "annotation_messages", filter: `annotation_id=eq.${annotationId}` },
         (payload) => {
           if (payload.eventType === "INSERT") {
-            setMessages((prev) => dedupeById([...prev, payload.new as AnnotationMessage]));
+            // Refetch to include enriched author fields
+            void fetch(`/api/annotations/${annotationId}/messages`, { credentials: "include" })
+              .then((r) => r.json())
+              .then((d) => setMessages(dedupeById(d.messages ?? [])))
+              .catch(() => {});
           } else if (payload.eventType === "DELETE") {
             const id = (payload.old as AnnotationMessage | null)?.id;
             if (id) setMessages((prev) => prev.filter((m) => m.id !== id));
@@ -142,7 +183,9 @@ export function useMessagesRealtime() {
       if (id) setMessages((prev) => prev.filter((m) => m.id !== id));
     });
 
-    channel.subscribe();
+    channel.subscribe((status) => {
+      console.log(`Supabase channel (annotation_messages:${annotationId}) status:`, status);
+    });
 
     channelRef.current = channel;
   }, []);

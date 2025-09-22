@@ -30,4 +30,6 @@ export interface AnnotationMessage {
   body: string;
   created_at: string;
   author_email?: string | null;
+  author_display_name?: string | null;
+  author_avatar_url?: string | null;
 }
