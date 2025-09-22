@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import type { Annotation } from "@/lib/types/annotations";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 type Point = { x: number; y: number };
 
@@ -47,6 +49,10 @@ export default function IframeOverlay({
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const [scroll, setScroll] = useState({ left: 0, top: 0 });
   const [contentSize, setContentSize] = useState({ width: 1, height: 1 });
+  const [newAnnoOpen, setNewAnnoOpen] = useState(false);
+  const [draftText, setDraftText] = useState("");
+  const pendingRef = useRef<{ selector: { type: "css"; value: string }; anchor: Point } | null>(null);
+
   // Ensure overlay releases if Shift state gets stuck (e.g., after prompt)
   useEffect(() => {
     const clear = () => setShiftHeld(false);
@@ -186,7 +192,6 @@ export default function IframeOverlay({
     return parts.reverse().join(" > ");
   }
 
-  // Create a pin at click position (Shift+Click) – element-anchored
   function handleOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
     if (!onCreateAt) return;
     if (!shiftHeld && !e.shiftKey) return;
@@ -195,14 +200,14 @@ export default function IframeOverlay({
     const iframe = iframeRef.current;
     if (!el || !iframe) return;
 
-    // Page-relative position (fallback)
+    // Page-relative fallback
     const rect = el.getBoundingClientRect();
     const pageXPct = (e.clientX - rect.left) / rect.width;
     const pageYPct = (e.clientY - rect.top) / rect.height;
 
-    // Try to resolve the element under the click inside the iframe viewport
+    // Element under cursor inside iframe
     const ifrRect = iframe.getBoundingClientRect();
-    const vx = e.clientX - ifrRect.left; // viewport coords inside iframe
+    const vx = e.clientX - ifrRect.left;
     const vy = e.clientY - ifrRect.top;
 
     let selector: string | null = null;
@@ -215,32 +220,37 @@ export default function IframeOverlay({
       if (hit && doc) {
         selector = buildSelector(hit);
         const hitRect = hit.getBoundingClientRect();
-        // normalize within the element box
         elXPct = (vx - hitRect.left) / Math.max(hitRect.width || 1, 1);
         elYPct = (vy - hitRect.top) / Math.max(hitRect.height || 1, 1);
-        // clamp
         elXPct = Math.min(Math.max(elXPct, 0), 1);
         elYPct = Math.min(Math.max(elYPct, 0), 1);
       }
     } catch {
-      // ignore, will use page-relative fallback
+      // ignore
     }
 
-    const text = window.prompt("Annotation text") ?? "";
-    if (!text.trim()) {
-      setShiftHeld(false);
-      return;
-    }
-
-    onCreateAt({
-      url: src, // proxied; server canonicalizes to external
+    pendingRef.current = {
       selector: selector ? { type: "css", value: selector } : { type: "css", value: "" },
-      // Store element-relative if we have a selector; otherwise keep page-relative
       anchor: { x: selector ? elXPct : pageXPct, y: selector ? elYPct : pageYPct },
-      text,
-    });
-
+    };
+    setDraftText("");
+    setNewAnnoOpen(true);
     setShiftHeld(false);
+  }
+
+  async function confirmCreate() {
+    if (!onCreateAt) return setNewAnnoOpen(false);
+    const pending = pendingRef.current;
+    if (!pending) return setNewAnnoOpen(false);
+    onCreateAt({
+      url: src, // proxied; server canonicalizes
+      selector: pending.selector,
+      anchor: pending.anchor,
+      text: draftText.trim(),
+    });
+    pendingRef.current = null;
+    setDraftText("");
+    setNewAnnoOpen(false);
   }
 
   function getAnchor(a: Annotation): { x: number; y: number } | null {
@@ -330,69 +340,106 @@ export default function IframeOverlay({
   }, [src]);
 
   return (
-    <div className="relative w-[95vw] h-[95vh] max-w-full max-h-full">
-      <iframe
-        ref={iframeRef}
-        src={src}
-        className="w-full h-full border-0"
-        sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
-      />
-      <div
-        ref={overlayRef}
-        className="absolute top-0 left-0"
-        style={{
-          width: contentSize.width,
-          height: contentSize.height,
-          pointerEvents: shiftHeld ? "auto" : "none",
-          transform: `translate(${-scroll.left}px, ${-scroll.top}px)`,
-        }}
-        onClick={handleOverlayClick}
-        title="Shift+Click to add a pin (hold Shift to enable overlay)"
-      >
-        {/* Pins with sonar animation */}
-        {visibleAnnotations.map((a) => {
-          const anchor = getAnchor(a);
-          if (!anchor) return null;
-          const left = anchor.x * contentSize.width;
-          const top = anchor.y * contentSize.height;
-          const isActive = !!activeId && a.id === activeId;
-          const colors = getPinColors(a, isActive);
+    <>
+      <div className="relative w-[95vw] h-[95vh] max-w-full max-h-full">
+        <iframe
+          ref={iframeRef}
+          src={src}
+          className="w-full h-full border-0"
+          sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+        />
+        <div
+          ref={overlayRef}
+          className="absolute top-0 left-0"
+          style={{
+            width: contentSize.width,
+            height: contentSize.height,
+            pointerEvents: shiftHeld ? "auto" : "none",
+            transform: `translate(${-scroll.left}px, ${-scroll.top}px)`,
+          }}
+          onClick={handleOverlayClick}
+          title="Shift+Click to add a pin (hold Shift to enable overlay)"
+        >
+          {/* Pins with sonar animation */}
+          {visibleAnnotations.map((a) => {
+            const anchor = getAnchor(a);
+            if (!anchor) return null;
+            const left = anchor.x * contentSize.width;
+            const top = anchor.y * contentSize.height;
+            const isActive = !!activeId && a.id === activeId;
+            const colors = getPinColors(a, isActive);
 
-          return (
-            <div
-              key={a.id}
-              className="absolute"
-              style={{
-                left,
-                top,
-                transform: "translate(-50%, -50%)",
-                pointerEvents: "auto",
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (a.id) onSelect(a.id);
-              }}
-              title={a.body?.text ?? "Annotation"}
-            >
+            return (
               <div
-                className="sonar-pin"
-                style={(() => {
-                  type CSSVarStyle = React.CSSProperties & { [K in `--pin-color` | `--pin-ring`]?: string };
-                  const cssVars: CSSVarStyle = {};
-                  cssVars["--pin-color"] = colors.dot;
-                  cssVars["--pin-ring"] = colors.ring;
-                  return cssVars;
-                })()}
+                key={a.id}
+                className="absolute"
+                style={{
+                  left,
+                  top,
+                  transform: "translate(-50%, -50%)",
+                  pointerEvents: "auto",
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (a.id) onSelect(a.id);
+                }}
+                title={a.body?.text ?? "Annotation"}
               >
-                <span className="dot" />
-                <span className="ring r1" />
-                <span className="ring r2" />
-                <span className="ring r3" />
+                <div
+                  className="sonar-pin"
+                  style={(() => {
+                    type CSSVarStyle = React.CSSProperties & { [K in `--pin-color` | `--pin-ring`]?: string };
+                    const cssVars: CSSVarStyle = {};
+                    cssVars["--pin-color"] = colors.dot;
+                    cssVars["--pin-ring"] = colors.ring;
+                    return cssVars;
+                  })()}
+                >
+                  <span className="dot" />
+                  <span className="ring r1" />
+                  <span className="ring r2" />
+                  <span className="ring r3" />
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
-    </div>
+
+      <Dialog
+        open={newAnnoOpen}
+        onOpenChange={(open) => {
+          setNewAnnoOpen(open);
+          if (!open) {
+            pendingRef.current = null;
+            setDraftText("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>New annotation</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-2">
+            <label className="text-xs text-muted-foreground">Note</label>
+            <textarea
+              className="min-h-[96px] w-full rounded border px-2 py-1 text-sm"
+              placeholder="Type your note..."
+              value={draftText}
+              autoFocus
+              onChange={(e) => setDraftText(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNewAnnoOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmCreate} disabled={!draftText.trim()}>
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
