@@ -51,6 +51,7 @@ export default function IframeOverlay({
   const [contentSize, setContentSize] = useState({ width: 1, height: 1 });
   const [newAnnoOpen, setNewAnnoOpen] = useState(false);
   const [draftText, setDraftText] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
   const pendingRef = useRef<{ selector: { type: "css"; value: string }; anchor: Point } | null>(null);
 
   // Ensure overlay releases if Shift state gets stuck (e.g., after prompt)
@@ -253,6 +254,71 @@ export default function IframeOverlay({
     setNewAnnoOpen(false);
   }
 
+  
+
+  // Helper: capture element context for AI
+  function captureElementContext() {
+    try {
+      const iframe = iframeRef.current;
+      const doc = iframe?.contentDocument || iframe?.contentWindow?.document;
+      if (!doc) return null;
+
+      // Prefer saved selector (from pendingRef) else fallback to element at last click anchor
+      const pending = pendingRef.current;
+      let el: Element | null = null;
+      if (pending?.selector?.value) {
+        el = doc.querySelector(pending.selector.value);
+      }
+      // Fallback: pick center of viewport (best-effort)
+      if (!el) el = doc.elementFromPoint(doc.documentElement.clientWidth / 2, doc.documentElement.clientHeight / 2);
+
+      if (!el) return null;
+
+      const text = (el as HTMLElement).innerText?.trim?.() ?? "";
+      const role = (el as HTMLElement).getAttribute?.("role") ?? "";
+      const aria = Array.from(el.attributes ?? [])
+        .filter(a => a.name.startsWith("aria-"))
+        .map(a => `${a.name}=${a.value}`)
+        .join(" ");
+      const rect = (el as HTMLElement).getBoundingClientRect();
+      const html = el.outerHTML ?? el.innerHTML ?? "";
+
+      return {
+        html,
+        text,
+        role,
+        aria,
+        bbox: { x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) },
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async function askAI() {
+    const ctx = captureElementContext();
+    setAiLoading(true);
+    try {
+      const external = canonicalize(src);
+      const selector = pendingRef.current?.selector?.value || "";
+      const res = await fetch("/api/ai/analyze", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: external, selector, context: ctx }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (res.ok && out?.suggestion) {
+        setDraftText(out.suggestion);
+      } else {
+        setDraftText(out?.error ? `AI error: ${out.error}` : "AI did not return a suggestion.");
+      }
+    } catch {
+      setDraftText("AI request failed.");
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
   function getAnchor(a: Annotation): { x: number; y: number } | null {
     try {
       // If we have a CSS selector, resolve element and convert element-relative -> page-relative
@@ -368,6 +434,12 @@ export default function IframeOverlay({
             const top = anchor.y * contentSize.height;
             const isActive = !!activeId && a.id === activeId;
             const colors = getPinColors(a, isActive);
+            const showBubble = isActive || shiftHeld;
+            const rawText = (a.body?.text ?? "").trim();
+            const preview = rawText.length > 160 ? rawText.slice(0, 160).trimEnd() + "…" : rawText;
+            const placeBelow = top < 96; // near top edge -> show below pin
+            const nearRight = left > contentSize.width - 220; // near right edge
+            const nearLeft = left < 120; // near left edge
 
             return (
               <div
@@ -400,6 +472,23 @@ export default function IframeOverlay({
                   <span className="ring r2" />
                   <span className="ring r3" />
                 </div>
+
+                {showBubble && preview && (
+                  <div
+                    className="absolute z-10 max-w-[240px] rounded-md border bg-background shadow-md text-xs leading-5 line-clamp-2"
+                    style={{
+                      // Edge-aware placement around the pin
+                      top: placeBelow ? 14 : -14,
+                      left: nearRight ? (nearLeft ? 0 : -8) : 8,
+                      transform: `translate(${nearRight ? (nearLeft ? 0 : -100) : 0}%, ${placeBelow ? 0 : -100}%)`,
+                      padding: "6px 8px",
+                      wordBreak: "break-word",
+                      whiteSpace: "pre-wrap",
+                    }}
+                  >
+                    {preview}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -433,6 +522,9 @@ export default function IframeOverlay({
           <DialogFooter>
             <Button variant="outline" onClick={() => setNewAnnoOpen(false)}>
               Cancel
+            </Button>
+            <Button variant="secondary" onClick={askAI} disabled={aiLoading}>
+              {aiLoading ? "Asking AI…" : "Ask AI"}
             </Button>
             <Button onClick={confirmCreate} disabled={!draftText.trim()}>
               Create

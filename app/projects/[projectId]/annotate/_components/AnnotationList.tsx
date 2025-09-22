@@ -128,6 +128,13 @@ export default function AnnotationList({
   }
 
   const normalizedCurrent = normalizeUrl(currentPageUrl);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggleExpanded = (id: string) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+  const excerpt = (text?: string, max = 180) => {
+    if (!text) return "(no text)";
+    if (text.length <= max) return text;
+    return text.slice(0, max).trimEnd() + "…";
+  };
 
   return (
     <div className="overflow-auto h-full divide-y">
@@ -162,27 +169,45 @@ export default function AnnotationList({
             ) : (
               <Skeleton className="h-6 w-6 rounded-full" />
             )}
-            <div className="flex-1 cursor-pointer" onClick={() => a.id && onSelect?.(a.id)}>
-              <div className="text-sm font-medium truncate">{a.body?.text ?? "(no text)"}</div>
-              <div className="text-xs text-muted-foreground">
-                {displayName}
-                {a.body?.time_of_day ? ` • ${a.body.time_of_day}` : ""}
+            <div className="flex-1">
+              <div className="text-sm font-medium whitespace-pre-wrap break-words">
+                {a.id && expanded[a.id]
+                  ? (a.body?.text ?? "(no text)")
+                  : excerpt(a.body?.text, 200)}
               </div>
-              <div className="text-xs text-muted-foreground">
-                <select
-                  className="border rounded px-1 py-0.5 text-xs"
-                  value={a.status ?? "todo"}
-                  disabled={updating === a.id}
-                  onChange={e => a.id && handleStatusChange(a.id, e.target.value)}
-                  style={{ minWidth: 110 }}
+              {a.id && (a.body?.text?.length ?? 0) > 200 && (
+                <button
+                  type="button"
+                  className="mt-1 text-xs text-blue-600 underline"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleExpanded(a.id!);
+                  }}
                 >
-                  {STATUS_OPTIONS.map(opt => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-                {updating === a.id && <span className="ml-2 text-xs text-muted-foreground">Saving…</span>}
+                  {expanded[a.id] ? "Show less" : "Show more"}
+                </button>
+              )}
+              <div className="mt-1" onClick={() => a.id && onSelect?.(a.id)}>
+                <div className="text-xs text-muted-foreground">
+                  {displayName}
+                  {a.body?.time_of_day ? ` • ${a.body.time_of_day}` : ""}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  <select
+                    className="border rounded px-1 py-0.5 text-xs"
+                    value={a.status ?? "todo"}
+                    disabled={updating === a.id}
+                    onChange={e => a.id && handleStatusChange(a.id, e.target.value)}
+                    style={{ minWidth: 110 }}
+                  >
+                    {STATUS_OPTIONS.map(opt => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  {updating === a.id && <span className="ml-2 text-xs text-muted-foreground">Saving…</span>}
+                </div>
               </div>
               {a.url && (
                 <div className="text-xs mt-1">

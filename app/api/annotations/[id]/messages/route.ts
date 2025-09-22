@@ -89,10 +89,18 @@ export async function POST(req: Request, context: unknown) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { body } = await req.json();
+  const MAX_TEXT = 10000;
+  const text = typeof body === "string" ? body : "";
+  if (text.length > MAX_TEXT) {
+    return NextResponse.json(
+      { error: `Message exceeds ${MAX_TEXT} characters. Please shorten.` },
+      { status: 413 }
+    );
+  }
 
   const { data, error } = await supa
     .from("annotation_messages")
-    .insert({ annotation_id: id, author_id: user.id, body })
+  .insert({ annotation_id: id, author_id: user.id, body: text })
     .select()
     .single();
 

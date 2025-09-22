@@ -152,6 +152,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing fields" }, { status: 400 });
     }
 
+    // --- Validate long text ---
+    const MAX_TEXT = 10000; // 10k characters soft cap
+    const rawText = typeof body?.text === "string" ? (body.text as string) : "";
+    if (rawText.length > MAX_TEXT) {
+      return NextResponse.json(
+        { error: `Annotation text exceeds ${MAX_TEXT} characters. Please shorten.` },
+        { status: 413 }
+      );
+    }
+
     // --- Add display name and time of day to annotation body ---
     const now = new Date();
     const timeOfDay = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
