@@ -1,5 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeSanitize from "rehype-sanitize";
 import { Skeleton } from "@/components/ui/skeleton";
 import NextImage from "next/image";
 import { Button } from "@/components/ui/button";
@@ -19,6 +22,8 @@ export default function MessagePanel({
 }) {
   const [text, setText] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggleExpanded = (id: string) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -54,7 +59,27 @@ export default function MessagePanel({
                   <div className="text-xs text-muted-foreground mb-1">
                     {display}
                   </div>
-                  <div>{m.body}</div>
+                  <div className="whitespace-pre-wrap break-words text-sm leading-5">
+                    {(() => {
+                      const full = m.body || "";
+                      const isExpanded = typeof m.id === "string" && expanded[m.id];
+                      const text = isExpanded ? full : (full.length > 400 ? full.slice(0, 400) + "…" : full);
+                      return (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+                          {text}
+                        </ReactMarkdown>
+                      );
+                    })()}
+                    {(m.body?.length || 0) > 400 && typeof m.id === "string" && (
+                      <button
+                        type="button"
+                        className="mt-1 text-xs text-blue-600 underline"
+                        onClick={() => toggleExpanded(m.id as string)}
+                      >
+                        {expanded[m.id as string] ? "Show less" : "Show more"}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
               <Button
