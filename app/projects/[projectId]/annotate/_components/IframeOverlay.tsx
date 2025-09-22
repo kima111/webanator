@@ -1,8 +1,12 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, Fragment } from "react";
+import type { CSSProperties } from "react";
 import type { Annotation } from "@/lib/types/annotations";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeSanitize from "rehype-sanitize";
 
 type Point = { x: number; y: number };
 
@@ -10,34 +14,27 @@ type Props = {
   url: string;
   annotations: Annotation[];
   onSelect: (id: string) => void;
-  onCreateAt?: (input: {
-    url: string;
-    selector: { type: "css"; value: string };
-    anchor: Point;
-    text: string;
-  }) => void;
+  onCreateAt?: (input: { url: string; selector: { type: "css"; value: string }; anchor: Point; text: string }) => void;
   onNavigated?: (externalUrl: string) => void;
-  /* NEW: active annotation id to highlight */
   activeId?: string | null;
 };
 
-export default function IframeOverlay({
-  url,
-  annotations,
-  onSelect,
-  onCreateAt,
-  onNavigated,
-  activeId,
-}: Props) {
+export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, onNavigated, activeId }: Props) {
   const [shiftHeld, setShiftHeld] = useState(false);
-  // Listen for shift key to enable overlay pointer events
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Shift") setShiftHeld(true);
-    };
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === "Shift") setShiftHeld(false);
-    };
+    if (!activeId) return;
+    setDismissed((prev) => {
+      if (!prev.has(activeId)) return prev;
+      const next = new Set(prev);
+      next.delete(activeId);
+      return next;
+    });
+  }, [activeId]);
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => { if (e.key === "Shift") setShiftHeld(true); };
+    const handleKeyUp = (e: KeyboardEvent) => { if (e.key === "Shift") setShiftHeld(false); };
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
     return () => {
@@ -45,16 +42,17 @@ export default function IframeOverlay({
       window.removeEventListener("keyup", handleKeyUp);
     };
   }, []);
+
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const [scroll, setScroll] = useState({ left: 0, top: 0 });
   const [contentSize, setContentSize] = useState({ width: 1, height: 1 });
+  const [viewerSize, setViewerSize] = useState({ width: 0, height: 0 });
   const [newAnnoOpen, setNewAnnoOpen] = useState(false);
   const [draftText, setDraftText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const pendingRef = useRef<{ selector: { type: "css"; value: string }; anchor: Point } | null>(null);
 
-  // Ensure overlay releases if Shift state gets stuck (e.g., after prompt)
   useEffect(() => {
     const clear = () => setShiftHeld(false);
     window.addEventListener("blur", clear);
@@ -65,7 +63,6 @@ export default function IframeOverlay({
     };
   }, []);
 
-  // Listen for clicks coming from inside the iframe (if your injected script posts messages)
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       const data = e.data as unknown;
@@ -80,27 +77,20 @@ export default function IframeOverlay({
     return () => window.removeEventListener("message", handler);
   }, [onSelect]);
 
-  // Empty/invalid URL guard
   const src = url?.trim() ? url : "about:blank";
 
-  // Canonicalize a URL. Unwraps /api/proxy?url=... and removes hash, normalizes trailing slash.
   function canonicalize(raw?: string): string {
     if (!raw) return "";
     try {
       const base = typeof window !== "undefined" ? window.location.origin : "http://localhost";
       const u = new URL(raw, base);
-      // Ignore non-http(s) schemes entirely
       if (!/^https?:$/.test(u.protocol)) return "";
-      // Extra guard against protocol-relative about:blank like //about//blank
       if (u.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(u.pathname)) return "";
-
       let external = raw;
-      // Unwrap proxied URLs like /api/proxy?url=<external>
       if (u.pathname.startsWith("/api/proxy")) {
         external = u.searchParams.get("url") ?? "";
       }
       if (!external) return "";
-
       const e = new URL(external, base);
       if (!/^https?:$/.test(e.protocol)) return "";
       if (e.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(e.pathname)) return "";
@@ -113,7 +103,6 @@ export default function IframeOverlay({
     }
   }
 
-  // Notify parent when iframe navigates to a new URL (poll to handle SPA and link clicks)
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
@@ -126,66 +115,42 @@ export default function IframeOverlay({
           last = external;
           onNavigated?.(external);
         }
-      } catch {
-        // Cross-origin guards; our proxy keeps it same-origin, so typically safe
-      }
+      } catch {}
     };
     tick();
     const id = setInterval(tick, 400);
     return () => clearInterval(id);
   }, [onNavigated, src]);
 
-  // Only show pins for the current annotated page
   const currentPage = canonicalize(src);
   const visibleAnnotations = annotations.filter(a => canonicalize(a.url) === currentPage);
 
-  // Choose pin color by status; override to blue if active
   function getPinColors(a: Annotation, isActive: boolean) {
-    if (isActive) {
-      return { dot: "#3b82f6", ring: "rgba(59,130,246,0.45)" }; // blue-500
-    }
+    if (isActive) return { dot: "#3b82f6", ring: "rgba(59,130,246,0.45)" };
     switch (a.status) {
-      case "open":
-        return { dot: "#ef4444", ring: "rgba(239,68,68,0.45)" }; // red-500
-      case "resolved":
-        return { dot: "#10b981", ring: "rgba(16,185,129,0.45)" }; // emerald-500
-      case "archived":
-        return { dot: "#f59e0b", ring: "rgba(245,158,11,0.45)" }; // amber-500
-      default:
-        return { dot: "#6b7280", ring: "rgba(107,114,128,0.45)" }; // gray-500
+      case "open": return { dot: "#ef4444", ring: "rgba(239,68,68,0.45)" };
+      case "resolved": return { dot: "#10b981", ring: "rgba(16,185,129,0.45)" };
+      case "archived": return { dot: "#f59e0b", ring: "rgba(245,158,11,0.45)" };
+      default: return { dot: "#6b7280", ring: "rgba(107,114,128,0.45)" };
     }
   }
 
-  // Build a reasonably stable CSS selector for an element
   function buildSelector(el: Element): string {
-    // Prefer id if unique
     if ((el as HTMLElement).id) {
       const id = (el as HTMLElement).id;
       try {
-        if (el.ownerDocument?.querySelectorAll(`#${CSS.escape(id)}`).length === 1) {
-          return `#${CSS.escape(id)}`;
-        }
+        if (el.ownerDocument?.querySelectorAll(`#${CSS.escape(id)}`).length === 1) return `#${CSS.escape(id)}`;
       } catch {}
     }
-    // Build path with nth-of-type to reduce churn
     const parts: string[] = [];
     let node: Element | null = el;
     while (node && node.nodeType === 1 && parts.length < 6) {
       const tag = node.tagName.toLowerCase();
-      // stop at body/html
-      if (tag === "html" || tag === "body") {
-        parts.push(tag);
-        break;
-      }
-      // If node has a data-* hook or role that could help, you can extend this
+      if (tag === "html" || tag === "body") { parts.push(tag); break; }
       let part = tag;
-      // nth-of-type
       let idx = 1;
       let sib = node.previousElementSibling;
-      while (sib) {
-        if (sib.tagName.toLowerCase() === tag) idx++;
-        sib = sib.previousElementSibling;
-      }
+      while (sib) { if (sib.tagName.toLowerCase() === tag) idx++; sib = sib.previousElementSibling; }
       part += `:nth-of-type(${idx})`;
       parts.push(part);
       node = node.parentElement;
@@ -196,25 +161,18 @@ export default function IframeOverlay({
   function handleOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
     if (!onCreateAt) return;
     if (!shiftHeld && !e.shiftKey) return;
-
     const el = overlayRef.current;
     const iframe = iframeRef.current;
     if (!el || !iframe) return;
-
-    // Page-relative fallback
     const rect = el.getBoundingClientRect();
     const pageXPct = (e.clientX - rect.left) / rect.width;
     const pageYPct = (e.clientY - rect.top) / rect.height;
-
-    // Element under cursor inside iframe
     const ifrRect = iframe.getBoundingClientRect();
     const vx = e.clientX - ifrRect.left;
     const vy = e.clientY - ifrRect.top;
-
     let selector: string | null = null;
     let elXPct = pageXPct;
     let elYPct = pageYPct;
-
     try {
       const doc = iframe.contentDocument || iframe.contentWindow?.document;
       const hit = doc?.elementFromPoint(vx, vy) as Element | null;
@@ -226,10 +184,7 @@ export default function IframeOverlay({
         elXPct = Math.min(Math.max(elXPct, 0), 1);
         elYPct = Math.min(Math.max(elYPct, 0), 1);
       }
-    } catch {
-      // ignore
-    }
-
+    } catch {}
     pendingRef.current = {
       selector: selector ? { type: "css", value: selector } : { type: "css", value: "" },
       anchor: { x: selector ? elXPct : pageXPct, y: selector ? elYPct : pageYPct },
@@ -243,53 +198,28 @@ export default function IframeOverlay({
     if (!onCreateAt) return setNewAnnoOpen(false);
     const pending = pendingRef.current;
     if (!pending) return setNewAnnoOpen(false);
-    onCreateAt({
-      url: src, // proxied; server canonicalizes
-      selector: pending.selector,
-      anchor: pending.anchor,
-      text: draftText.trim(),
-    });
+    onCreateAt({ url: src, selector: pending.selector, anchor: pending.anchor, text: draftText.trim() });
     pendingRef.current = null;
     setDraftText("");
     setNewAnnoOpen(false);
   }
 
-  
-
-  // Helper: capture element context for AI
   function captureElementContext() {
     try {
       const iframe = iframeRef.current;
       const doc = iframe?.contentDocument || iframe?.contentWindow?.document;
       if (!doc) return null;
-
-      // Prefer saved selector (from pendingRef) else fallback to element at last click anchor
       const pending = pendingRef.current;
       let el: Element | null = null;
-      if (pending?.selector?.value) {
-        el = doc.querySelector(pending.selector.value);
-      }
-      // Fallback: pick center of viewport (best-effort)
+      if (pending?.selector?.value) el = doc.querySelector(pending.selector.value);
       if (!el) el = doc.elementFromPoint(doc.documentElement.clientWidth / 2, doc.documentElement.clientHeight / 2);
-
       if (!el) return null;
-
       const text = (el as HTMLElement).innerText?.trim?.() ?? "";
       const role = (el as HTMLElement).getAttribute?.("role") ?? "";
-      const aria = Array.from(el.attributes ?? [])
-        .filter(a => a.name.startsWith("aria-"))
-        .map(a => `${a.name}=${a.value}`)
-        .join(" ");
+      const aria = Array.from(el.attributes ?? []).filter(a => a.name.startsWith("aria-")).map(a => `${a.name}=${a.value}`).join(" ");
       const rect = (el as HTMLElement).getBoundingClientRect();
-      const html = el.outerHTML ?? el.innerHTML ?? "";
-
-      return {
-        html,
-        text,
-        role,
-        aria,
-        bbox: { x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) },
-      };
+      const html = (el as HTMLElement).outerHTML ?? (el as HTMLElement).innerHTML ?? "";
+      return { html, text, role, aria, bbox: { x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) } };
     } catch {
       return null;
     }
@@ -301,17 +231,10 @@ export default function IframeOverlay({
     try {
       const external = canonicalize(src);
       const selector = pendingRef.current?.selector?.value || "";
-      const res = await fetch("/api/ai/analyze", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url: external, selector, context: ctx }),
-      });
+      const res = await fetch("/api/ai/analyze", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: external, selector, context: ctx }) });
       const out = await res.json().catch(() => ({}));
-      if (res.ok && out?.suggestion) {
-        setDraftText(out.suggestion);
-      } else {
-        setDraftText(out?.error ? `AI error: ${out.error}` : "AI did not return a suggestion.");
-      }
+      if (res.ok && out?.suggestion) setDraftText(out.suggestion);
+      else setDraftText(out?.error ? `AI error: ${out.error}` : "AI did not return a suggestion.");
     } catch {
       setDraftText("AI request failed.");
     } finally {
@@ -321,7 +244,6 @@ export default function IframeOverlay({
 
   function getAnchor(a: Annotation): { x: number; y: number } | null {
     try {
-      // If we have a CSS selector, resolve element and convert element-relative -> page-relative
       const sel = a.selector;
       const elRel = a.body?.anchor;
       if (sel?.type === "css" && sel?.value && typeof elRel?.x === "number" && typeof elRel?.y === "number") {
@@ -329,20 +251,14 @@ export default function IframeOverlay({
         const doc = iframe?.contentDocument || iframe?.contentWindow?.document;
         const node = doc?.querySelector(sel.value);
         if (node && doc) {
-          const nRect = node.getBoundingClientRect();
+          const nRect = (node as HTMLElement).getBoundingClientRect();
           const scrollLeft = doc.documentElement.scrollLeft || doc.body.scrollLeft || 0;
           const scrollTop = doc.documentElement.scrollTop || doc.body.scrollTop || 0;
           const absX = nRect.left + scrollLeft + nRect.width * elRel.x;
           const absY = nRect.top + scrollTop + nRect.height * elRel.y;
-          // convert to page-relative percentages expected by renderer
-          return {
-            x: absX / Math.max(contentSize.width || 1, 1),
-            y: absY / Math.max(contentSize.height || 1, 1),
-          };
+          return { x: absX / Math.max(contentSize.width || 1, 1), y: absY / Math.max(contentSize.height || 1, 1) };
         }
       }
-
-      // Fallbacks (point selector or page-relative anchor)
       if (a.selector?.type === "point" && a.selector?.value) {
         const p = JSON.parse(a.selector.value);
         if (typeof p?.x === "number" && typeof p?.y === "number") return p;
@@ -353,34 +269,33 @@ export default function IframeOverlay({
     return null;
   }
 
-  // Sync overlay with iframe scroll and content size
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
     function updateOverlay() {
       try {
-        if (!iframe) return;
-        const doc = iframe.contentDocument || iframe.contentWindow?.document;
+        const doc = iframe?.contentDocument || iframe?.contentWindow?.document;
         if (!doc) return;
-        const scrollLeft = doc.documentElement.scrollLeft || doc.body.scrollLeft;
-        const scrollTop = doc.documentElement.scrollTop || doc.body.scrollTop;
+        const scrollLeft = doc.documentElement.scrollLeft || doc.body.scrollLeft || 0;
+        const scrollTop = doc.documentElement.scrollTop || doc.body.scrollTop || 0;
         setScroll({ left: scrollLeft, top: scrollTop });
-        const width = doc.documentElement.scrollWidth || doc.body.scrollWidth;
-        const height = doc.documentElement.scrollHeight || doc.body.scrollHeight;
+        const width = doc.documentElement.scrollWidth || doc.body.scrollWidth || 1;
+        const height = doc.documentElement.scrollHeight || doc.body.scrollHeight || 1;
         setContentSize({ width, height });
+        // visible viewport of the iframe element in outer page coordinates
+        const rect = iframe.getBoundingClientRect();
+        setViewerSize({ width: Math.max(0, Math.round(rect.width)), height: Math.max(0, Math.round(rect.height)) });
       } catch {}
     }
     updateOverlay();
-    const interval = setInterval(updateOverlay, 100); // Polling for cross-origin safety
+    const interval = setInterval(updateOverlay, 100);
     return () => clearInterval(interval);
   }, [src]);
 
-  // Also listen for Shift inside the iframe so overlay can capture clicks while focused there
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
     let detach: (() => void) | null = null;
-
     const attach = () => {
       try {
         const win = iframe.contentWindow;
@@ -389,44 +304,25 @@ export default function IframeOverlay({
         const ku = (e: KeyboardEvent) => { if (e.key === "Shift") setShiftHeld(false); };
         win.addEventListener("keydown", kd);
         win.addEventListener("keyup", ku);
-        detach = () => {
-          win.removeEventListener("keydown", kd);
-          win.removeEventListener("keyup", ku);
-        };
+        detach = () => { win.removeEventListener("keydown", kd); win.removeEventListener("keyup", ku); };
       } catch {}
     };
-
-    // Try immediately and also after a tick (iframe reloads)
     attach();
     const id = setInterval(attach, 300);
-    return () => {
-      clearInterval(id);
-      detach?.();
-    };
+    return () => { clearInterval(id); detach?.(); };
   }, [src]);
 
   return (
     <>
       <div className="relative w-[95vw] h-[95vh] max-w-full max-h-full">
-        <iframe
-          ref={iframeRef}
-          src={src}
-          className="w-full h-full border-0"
-          sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
-        />
+        <iframe ref={iframeRef} src={src} className="w-full h-full border-0" sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts" />
         <div
           ref={overlayRef}
           className="absolute top-0 left-0"
-          style={{
-            width: contentSize.width,
-            height: contentSize.height,
-            pointerEvents: shiftHeld ? "auto" : "none",
-            transform: `translate(${-scroll.left}px, ${-scroll.top}px)`,
-          }}
+          style={{ width: contentSize.width, height: contentSize.height, pointerEvents: shiftHeld ? "auto" : "none", transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }}
           onClick={handleOverlayClick}
           title="Shift+Click to add a pin (hold Shift to enable overlay)"
         >
-          {/* Pins with sonar animation */}
           {visibleAnnotations.map((a) => {
             const anchor = getAnchor(a);
             if (!anchor) return null;
@@ -434,33 +330,23 @@ export default function IframeOverlay({
             const top = anchor.y * contentSize.height;
             const isActive = !!activeId && a.id === activeId;
             const colors = getPinColors(a, isActive);
-            const showBubble = isActive || shiftHeld;
+            const showBubble = (isActive || shiftHeld) && !dismissed.has(a.id);
             const rawText = (a.body?.text ?? "").trim();
-            const preview = rawText.length > 160 ? rawText.slice(0, 160).trimEnd() + "…" : rawText;
-            const placeBelow = top < 96; // near top edge -> show below pin
-            const nearRight = left > contentSize.width - 220; // near right edge
-            const nearLeft = left < 120; // near left edge
-
+            const limit = isActive ? 1000 : 600;
+            const preview = rawText.length > limit ? rawText.slice(0, limit).trimEnd() + "…" : rawText;
+            const placeBelow = top < 120;
             return (
               <div
                 key={a.id}
                 className="absolute"
-                style={{
-                  left,
-                  top,
-                  transform: "translate(-50%, -50%)",
-                  pointerEvents: "auto",
-                }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (a.id) onSelect(a.id);
-                }}
+                style={{ left, top, transform: "translate(-50%, -50%)", pointerEvents: "auto" }}
+                onClick={(e) => { e.stopPropagation(); if (a.id) onSelect(a.id); }}
                 title={a.body?.text ?? "Annotation"}
               >
                 <div
                   className="sonar-pin"
                   style={(() => {
-                    type CSSVarStyle = React.CSSProperties & { [K in `--pin-color` | `--pin-ring`]?: string };
+                    type CSSVarStyle = CSSProperties & { [K in `--pin-color` | `--pin-ring`]?: string };
                     const cssVars: CSSVarStyle = {};
                     cssVars["--pin-color"] = colors.dot;
                     cssVars["--pin-ring"] = colors.ring;
@@ -473,62 +359,84 @@ export default function IframeOverlay({
                   <span className="ring r3" />
                 </div>
 
-                {showBubble && preview && (
-                  <div
-                    className="absolute z-10 max-w-[240px] rounded-md border bg-background shadow-md text-xs leading-5 line-clamp-2"
-                    style={{
-                      // Edge-aware placement around the pin
-                      top: placeBelow ? 14 : -14,
-                      left: nearRight ? (nearLeft ? 0 : -8) : 8,
-                      transform: `translate(${nearRight ? (nearLeft ? 0 : -100) : 0}%, ${placeBelow ? 0 : -100}%)`,
-                      padding: "6px 8px",
-                      wordBreak: "break-word",
-                      whiteSpace: "pre-wrap",
-                    }}
-                  >
-                    {preview}
-                  </div>
-                )}
+                {showBubble && preview && (() => {
+                  // Compute bubble width in px based on visible iframe width
+                  const desired = Math.round(viewerSize.width * 0.3);
+                  const bubbleW = Math.max(260, Math.min(520, desired || 0));
+                  // Clamp the bubble center horizontally within viewer (to avoid spilling outside)
+                  const pinX = left - scroll.left; // pin in outer coords
+                  const half = bubbleW / 2;
+                  const viewerLeft = 0;
+                  const viewerRight = viewerSize.width;
+                  const clampedCenter = Math.max(viewerLeft + half, Math.min(viewerRight - half, pinX));
+                  const offsetX = clampedCenter - pinX; // pixels to shift from pin center
+                  return (
+                    <div
+                      className={`absolute z-10 rounded-md border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 shadow-md ${isActive ? "text-base leading-7" : "text-sm leading-6"}`}
+                      style={{
+                        top: placeBelow ? 16 : -16,
+                        left: offsetX,
+                        transform: `translate(calc(-50% + ${offsetX}px), ${placeBelow ? 0 : -100}%)`,
+                        width: bubbleW,
+                        padding: isActive ? "10px 12px" : "8px 10px",
+                        wordBreak: "break-word",
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                    <button
+                      type="button"
+                      aria-label="Close preview"
+                      className="absolute top-1.5 right-1.5 inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDismissed((prev) => new Set(prev).add(a.id));
+                      }}
+                    >
+                      ×
+                    </button>
+                    <div className={isActive ? "line-clamp-6" : "line-clamp-4"}>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        rehypePlugins={[rehypeSanitize]}
+                        components={{
+                          p: ({ children }) => <span>{children} </span>,
+                          ul: ({ children }) => <span>{children}</span>,
+                          ol: ({ children }) => <span>{children}</span>,
+                          li: ({ children }) => <span>{children} </span>,
+                          a: ({ children }) => <span className="underline">{children}</span>,
+                          h1: ({ children }) => <strong>{children}</strong>,
+                          h2: ({ children }) => <strong>{children}</strong>,
+                          h3: ({ children }) => <strong>{children}</strong>,
+                          h4: ({ children }) => <strong>{children}</strong>,
+                          h5: ({ children }) => <strong>{children}</strong>,
+                          h6: ({ children }) => <strong>{children}</strong>,
+                        }}
+                      >
+                        {preview}
+                      </ReactMarkdown>
+                    </div>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}
         </div>
       </div>
 
-      <Dialog
-        open={newAnnoOpen}
-        onOpenChange={(open) => {
-          setNewAnnoOpen(open);
-          if (!open) {
-            pendingRef.current = null;
-            setDraftText("");
-          }
-        }}
-      >
+      <Dialog open={newAnnoOpen} onOpenChange={(open) => { setNewAnnoOpen(open); if (!open) { pendingRef.current = null; setDraftText(""); } }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>New annotation</DialogTitle>
           </DialogHeader>
           <div className="grid gap-2">
             <label className="text-xs text-muted-foreground">Note</label>
-            <textarea
-              className="min-h-[96px] w-full rounded border px-2 py-1 text-sm"
-              placeholder="Type your note..."
-              value={draftText}
-              autoFocus
-              onChange={(e) => setDraftText(e.target.value)}
-            />
+            <textarea className="min-h-[96px] w-full rounded border px-2 py-1 text-sm" placeholder="Type your note..." value={draftText} autoFocus onChange={(e) => setDraftText(e.target.value)} />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setNewAnnoOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="secondary" onClick={askAI} disabled={aiLoading}>
-              {aiLoading ? "Asking AI…" : "Ask AI"}
-            </Button>
-            <Button onClick={confirmCreate} disabled={!draftText.trim()}>
-              Create
-            </Button>
+            <Button variant="outline" onClick={() => setNewAnnoOpen(false)}>Cancel</Button>
+            <Button variant="secondary" onClick={askAI} disabled={aiLoading}>{aiLoading ? "Asking AI…" : "Ask AI"}</Button>
+            <Button onClick={confirmCreate} disabled={!draftText.trim()}>Create</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

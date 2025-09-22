@@ -4,6 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import NextImage from "next/image";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeSanitize from "rehype-sanitize";
 
 const STATUS_OPTIONS = [
   { value: "open", label: "Open" },
@@ -170,11 +173,25 @@ export default function AnnotationList({
               <Skeleton className="h-6 w-6 rounded-full" />
             )}
             <div className="flex-1">
-              <div className="text-sm font-medium whitespace-pre-wrap break-words">
-                {a.id && expanded[a.id]
-                  ? (a.body?.text ?? "(no text)")
-                  : excerpt(a.body?.text, 200)}
-              </div>
+              {a.id && expanded[a.id] ? (
+                <div
+                  className="whitespace-pre-wrap break-words text-sm leading-5"
+                  onClick={() => a.id && onSelect?.(a.id)}
+                >
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+                    {a.body?.text ?? "(no text)"}
+                  </ReactMarkdown>
+                </div>
+              ) : (
+                <div
+                  className="text-sm whitespace-pre-wrap break-words"
+                  onClick={() => a.id && onSelect?.(a.id)}
+                >
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+                    {excerpt(a.body?.text, 200)}
+                  </ReactMarkdown>
+                </div>
+              )}
               {a.id && (a.body?.text?.length ?? 0) > 200 && (
                 <button
                   type="button"
