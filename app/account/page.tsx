@@ -14,6 +14,7 @@ export default async function AccountPage() {
   const first_name = typeof meta.first_name === "string" ? meta.first_name : "";
   const last_name = typeof meta.last_name === "string" ? meta.last_name : "";
   const username = typeof meta.username === "string" ? meta.username : "";
+  const avatarUrl = typeof meta.avatar_url === "string" && meta.avatar_url.length > 0 ? (meta.avatar_url as string) : undefined;
 
   return (
     <div className="container mx-auto max-w-7xl py-8">
@@ -35,6 +36,7 @@ export default async function AccountPage() {
             username={username}
             firstName={first_name}
             lastName={last_name}
+            avatarUrl={avatarUrl}
           />
         </CardContent>
       </Card>
