@@ -30,19 +30,24 @@ CREATE INDEX IF NOT EXISTS idx_projects_owner ON public.projects(owner_id);
 -- Projects policies
 DO $$
 BEGIN
-  IF NOT EXISTS (
+  -- Replace recursive EXISTS with function-based membership check
+  IF EXISTS (
     SELECT 1 FROM pg_policies
     WHERE schemaname='public' AND tablename='projects'
       AND policyname='projects_select_member_or_owner'
   ) THEN
+    ALTER POLICY projects_select_member_or_owner
+      ON public.projects
+      USING (
+        owner_id = auth.uid()
+        OR public.is_member_of_project(projects.id)
+      );
+  ELSE
     CREATE POLICY projects_select_member_or_owner
       ON public.projects FOR SELECT
       USING (
         owner_id = auth.uid()
-        OR EXISTS (
-          SELECT 1 FROM public.project_members pm
-          WHERE pm.project_id = projects.id AND pm.user_id = auth.uid()
-        )
+        OR public.is_member_of_project(projects.id)
       );
   END IF;
 
@@ -164,6 +169,75 @@ BEGIN
     CREATE POLICY "project_members_select_own"
       ON public.project_members FOR SELECT
       USING (user_id = auth.uid());
+  END IF;
+
+  -- Helper function to check membership without triggering recursive RLS
+  BEGIN
+    CREATE OR REPLACE FUNCTION public.is_member_of_project(pid uuid)
+    RETURNS boolean
+    LANGUAGE sql
+    SECURITY DEFINER
+    SET search_path = public, pg_temp
+    AS $fn$
+      select exists (
+        select 1 from public.project_members
+        where project_id = pid and user_id = auth.uid()
+      );
+    $fn$;
+    ALTER FUNCTION public.is_member_of_project(pid uuid) OWNER TO postgres;
+    GRANT EXECUTE ON FUNCTION public.is_member_of_project(uuid) TO authenticated, anon;
+  EXCEPTION WHEN others THEN
+    -- ignore if function already exists or permissions set elsewhere
+    NULL;
+  END;
+
+  -- Helper function to check ownership without referencing projects in policies
+  BEGIN
+    CREATE OR REPLACE FUNCTION public.is_owner_of_project(pid uuid)
+    RETURNS boolean
+    LANGUAGE sql
+    SECURITY DEFINER
+    SET search_path = public, pg_temp
+    AS $fn$
+      select exists (
+        select 1 from public.projects p
+        where p.id = pid and p.owner_id = auth.uid()
+      );
+    $fn$;
+    ALTER FUNCTION public.is_owner_of_project(pid uuid) OWNER TO postgres;
+    GRANT EXECUTE ON FUNCTION public.is_owner_of_project(uuid) TO authenticated, anon;
+  EXCEPTION WHEN others THEN NULL;
+  END;
+
+  -- Replace any recursive select policy with function-based one
+  BEGIN
+    IF EXISTS (
+      SELECT 1 FROM pg_policies
+      WHERE schemaname='public' AND tablename='project_members'
+        AND policyname='project_members_select_if_in_project'
+    ) THEN
+      EXECUTE 'DROP POLICY "project_members_select_if_in_project" ON public.project_members';
+    END IF;
+  EXCEPTION WHEN others THEN NULL; END;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname='public' AND tablename='project_members'
+      AND policyname='project_members_select_if_in_project'
+  ) THEN
+    ALTER POLICY "project_members_select_if_in_project"
+      ON public.project_members
+      USING (
+        public.is_member_of_project(project_members.project_id)
+        OR public.is_owner_of_project(project_members.project_id)
+      );
+  ELSE
+    CREATE POLICY "project_members_select_if_in_project"
+      ON public.project_members FOR SELECT
+      USING (
+        public.is_member_of_project(project_members.project_id)
+        OR public.is_owner_of_project(project_members.project_id)
+      );
   END IF;
 
   IF NOT EXISTS (
@@ -322,6 +396,22 @@ $$;
 DO $$
 BEGIN
   IF to_regclass('public.annotations') IS NOT NULL THEN
+    -- Add assignee columns (safe if already exist)
+    BEGIN
+      ALTER TABLE public.annotations ADD COLUMN IF NOT EXISTS assigned_to uuid REFERENCES auth.users(id);
+      ALTER TABLE public.annotations ADD COLUMN IF NOT EXISTS assigned_at timestamptz;
+      CREATE INDEX IF NOT EXISTS idx_annotations_assigned_to ON public.annotations(assigned_to);
+    EXCEPTION WHEN others THEN
+      -- ignore if permissions or already created by another migration
+      NULL;
+    END;
+    -- Enable RLS on annotations table
+    BEGIN
+      EXECUTE 'ALTER TABLE public.annotations ENABLE ROW LEVEL SECURITY';
+    EXCEPTION WHEN others THEN
+      NULL;
+    END;
+
     IF NOT EXISTS (
       SELECT 1 FROM pg_policies
       WHERE schemaname='public' AND tablename='annotations'
@@ -351,6 +441,55 @@ BEGIN
             WHERE pm.project_id = annotations.project_id
               AND pm.user_id = auth.uid()
           )
+        );
+    END IF;
+
+    -- Update policy: only editors/owners can update annotations (e.g., status, assigned_to)
+    IF EXISTS (
+      SELECT 1 FROM pg_policies
+      WHERE schemaname='public' AND tablename='annotations'
+        AND policyname='annotations_update_if_editor_or_owner'
+    ) THEN
+      ALTER POLICY annotations_update_if_editor_or_owner
+        ON public.annotations
+        USING (
+          EXISTS (
+            SELECT 1 FROM public.project_members pm
+            WHERE pm.project_id = annotations.project_id
+              AND pm.user_id = auth.uid()
+              AND pm.role IN ('editor','owner')
+          )
+          OR public.is_owner_of_project(annotations.project_id)
+        )
+        WITH CHECK (
+          EXISTS (
+            SELECT 1 FROM public.project_members pm
+            WHERE pm.project_id = annotations.project_id
+              AND pm.user_id = auth.uid()
+              AND pm.role IN ('editor','owner')
+          )
+          OR public.is_owner_of_project(annotations.project_id)
+        );
+    ELSE
+      CREATE POLICY annotations_update_if_editor_or_owner
+        ON public.annotations FOR UPDATE
+        USING (
+          EXISTS (
+            SELECT 1 FROM public.project_members pm
+            WHERE pm.project_id = annotations.project_id
+              AND pm.user_id = auth.uid()
+              AND pm.role IN ('editor','owner')
+          )
+          OR public.is_owner_of_project(annotations.project_id)
+        )
+        WITH CHECK (
+          EXISTS (
+            SELECT 1 FROM public.project_members pm
+            WHERE pm.project_id = annotations.project_id
+              AND pm.user_id = auth.uid()
+              AND pm.role IN ('editor','owner')
+          )
+          OR public.is_owner_of_project(annotations.project_id)
         );
     END IF;
   END IF;

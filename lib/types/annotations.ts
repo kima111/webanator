@@ -19,6 +19,8 @@ export interface Annotation {
   selector: Selector;
   body: AnnotationBody;
   status: AnnotationStatus;
+  assigned_to?: string | null;
+  assigned_at?: string | null;
   created_at: string;
   updated_at: string;
 }

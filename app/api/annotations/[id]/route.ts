@@ -28,13 +28,21 @@ export async function PATCH(req: Request, context: any) {
   } = await supa.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Only allow updating status for now
-  const { status } = body;
-  if (!status) return NextResponse.json({ error: "Missing status" }, { status: 400 });
+  // Allow updating status and/or assigned_to
+  const { status, assigned_to } = body as { status?: string; assigned_to?: string | null };
+  if (typeof status === "undefined" && typeof assigned_to === "undefined") {
+    return NextResponse.json({ error: "Missing fields" }, { status: 400 });
+  }
+  const patch: Record<string, unknown> = {};
+  if (typeof status !== "undefined") patch.status = status;
+  if (typeof assigned_to !== "undefined") {
+    patch.assigned_to = assigned_to;
+    patch["assigned_at"] = assigned_to ? new Date().toISOString() : null;
+  }
 
   const { data, error } = await supa
     .from("annotations")
-    .update({ status })
+    .update(patch)
     .eq("id", id)
     .select()
     .single();
