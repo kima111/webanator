@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState, Fragment } from "react";
+import { useEffect, useRef, useState, Fragment, useMemo } from "react";
 import type { CSSProperties } from "react";
 import type { Annotation } from "@/lib/types/annotations";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -22,6 +22,7 @@ type Props = {
 export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, onNavigated, activeId }: Props) {
   const [shiftHeld, setShiftHeld] = useState(false);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [membersByProject, setMembersByProject] = useState<Record<string, Record<string, { label: string; avatar_url?: string | null }>>>({});
 
   useEffect(() => {
     if (!activeId) return;
@@ -124,6 +125,45 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
 
   const currentPage = canonicalize(src);
   const visibleAnnotations = annotations.filter(a => canonicalize(a.url) === currentPage);
+
+  // Fetch project members for any visible annotation's project to resolve assignee display
+  const visibleProjectIds = useMemo(() => Array.from(new Set(visibleAnnotations.map(a => a.project_id).filter(Boolean))), [visibleAnnotations]);
+  useEffect(() => {
+    (async () => {
+      for (const pid of visibleProjectIds) {
+        if (!pid) continue;
+        if (membersByProject[pid]) continue;
+        try {
+          const res = await fetch(`/api/projects/${pid}/members`, { cache: "no-store" });
+          const out = await res.json();
+          const members = Array.isArray(out?.members) ? out.members as Array<{ user_id: string; email?: string | null; username?: string | null; first_name?: string | null; last_name?: string | null; avatar_url?: string | null }> : [];
+          const rec: Record<string, { label: string; avatar_url?: string | null }> = {};
+          for (const m of members) {
+            const label = m.username || [m.first_name, m.last_name].filter(Boolean).join(" ") || m.email || m.user_id;
+            rec[m.user_id] = { label, avatar_url: m.avatar_url ?? null };
+          }
+          if (Object.keys(rec).length) {
+            setMembersByProject(prev => ({ ...prev, [pid]: rec }));
+          } else {
+            setMembersByProject(prev => ({ ...prev, [pid]: {} }));
+          }
+        } catch {
+          // ignore fetch errors; leave empty map
+          setMembersByProject(prev => ({ ...prev, [pid]: prev[pid] || {} }));
+        }
+      }
+    })();
+  }, [visibleProjectIds, membersByProject]);
+
+  function getAssigneeInfo(a: Annotation): { label: string; avatar_url?: string | null } | null {
+    const uid = a.assigned_to;
+    if (!uid) return null;
+    const projectMap = membersByProject[a.project_id] || {};
+    const info = projectMap[uid];
+    if (info) return info;
+    // Fallback label
+    return { label: uid.slice(0, 8), avatar_url: null };
+  }
 
   function getPinColors(a: Annotation, isActive: boolean) {
     if (isActive) return { dot: "#3b82f6", ring: "rgba(59,130,246,0.45)" };
@@ -394,6 +434,17 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
                     >
                       ×
                     </button>
+                    {a.assigned_to && (() => {
+                      const info = getAssigneeInfo(a);
+                      if (!info) return null;
+                      const avatar = info.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(info.label)}`;
+                      return (
+                        <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
+                          <img src={avatar} alt={info.label} className="h-4 w-4 rounded-full border object-cover" />
+                          <span className="truncate">Assigned to {info.label}</span>
+                        </div>
+                      );
+                    })()}
                     <div className={isActive ? "line-clamp-6" : "line-clamp-4"}>
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}

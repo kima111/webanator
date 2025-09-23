@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import IframeOverlay from "./IframeOverlay";
 import AnnotationList from "./AnnotationList";
 import MessagePanel from "./MessagePanel";
+import type { Annotation } from "@/lib/types/annotations";
 import { useAnnotationRealtime, useMessagesRealtime } from "@/lib/hooks/realtime";
+import { createClient } from "@/lib/supabase/client";
 
 export default function AnnotatorShell({ projectId, initialUrl }: { projectId: string; initialUrl: string }) {
   const [pageUrl, setPageUrl] = useState<string>(initialUrl || "");
@@ -141,6 +143,33 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
     if (data?.id) setActiveAnnotationId(data.id);
   }
 
+  // Supabase realtime subscription for annotation updates
+  useEffect(() => {
+    const supabase = createClient();
+    const channel = supabase
+      .channel("annotations")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "annotations",
+          filter: `project_id=eq.${projectId}`,
+        },
+        (payload) => {
+          if (payload.eventType === "UPDATE" && payload.new) {
+            // Check if assigned_to changed
+            // onAnnotationUpdate(payload.new);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [projectId]);
+
   return (
     <div className={`relative w-[95vw] mx-auto h-[calc(100vh-88px)]`}>
       <div className="mb-2 flex gap-2">
@@ -203,12 +232,18 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
           {/* Optionally show a small status of current page */}
           {/* <div className="mt-2 text-xs text-muted-foreground truncate">Viewing: {tempUrl}</div> */}
           <div className="mt-4">
+            {(() => {
+              const active: Annotation | null = (annotations || []).find(a => a.id === activeAnnotationId) || null;
+              return (
             <MessagePanel
               annotationId={activeAnnotationId}
               messages={messages}
               onSend={sendMessage}
               onDelete={deleteMessage}
+                activeAnnotation={active}
             />
+              );
+            })()}
           </div>
         </div>
       </div>
