@@ -8,8 +8,20 @@ import { useAnnotationRealtime, useMessagesRealtime } from "@/lib/hooks/realtime
 import { createClient } from "@/lib/supabase/client";
 
 export default function AnnotatorShell({ projectId, initialUrl }: { projectId: string; initialUrl: string }) {
-  const [pageUrl, setPageUrl] = useState<string>(initialUrl || "");
-  const [tempUrl, setTempUrl] = useState<string>(initialUrl || "");
+  function decodeMaybe(u: string): string {
+    if (!u) return u;
+    try {
+      const once = decodeURIComponent(u);
+      if (once !== u && /%[0-9A-Fa-f]{2}/.test(once)) {
+        try { return decodeURIComponent(once); } catch { return once; }
+      }
+      return once;
+    } catch { return u; }
+  }
+  const normalizedInitial = decodeMaybe(initialUrl);
+  console.log("[AnnotatorShell] initialUrl", { initialUrl, normalizedInitial });
+  const [pageUrl, setPageUrl] = useState<string>(normalizedInitial || "");
+  const [tempUrl, setTempUrl] = useState<string>(normalizedInitial || "");
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
   const lastExternalOriginRef = useRef<string>("");
   const suppressUntilRef = useRef<string | null>(null);
@@ -52,6 +64,21 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
   // Normalize to a proxied URL. Accepts raw external URLs and already-proxied URLs.
   function toProxied(raw: string): string {
     if (!raw) return "";
+    // Allow direct internal image viewer path
+    if (raw.startsWith("/image-viewer")) return raw;
+    try {
+      const maybe = new URL(raw, window.location.origin);
+      // If same-origin and not an external http(s), just return path (avoid looping through proxy)
+      if (maybe.origin === window.location.origin) {
+        if (maybe.pathname.startsWith("/image-viewer")) {
+          return maybe.pathname + maybe.search;
+        }
+        // For any other same-origin path, return as-is
+        if (/^\//.test(raw) || maybe.origin === window.location.origin) {
+          return maybe.pathname + maybe.search;
+        }
+      }
+    } catch { /* fall through to existing logic */ }
     try {
       let s = raw.trim();
       // Ignore non-http(s) schemes to avoid bad proxy requests
@@ -76,6 +103,7 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
 
   // When iframe navigates internally, reflect it in the address bar and state
   function handleIframeNavigated(externalUrl: string) {
+    console.log("[AnnotatorShell] iframe navigated", externalUrl);
     // If we initiated a navigation, ignore intermediate updates until we reach the target
     if (suppressUntilRef.current && externalUrl !== suppressUntilRef.current) {
       return;

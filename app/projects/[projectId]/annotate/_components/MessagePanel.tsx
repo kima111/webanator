@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import { Skeleton } from "@/components/ui/skeleton";
-import NextImage from "next/image";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Annotation, AnnotationMessage } from "@/lib/types/annotations";
@@ -73,10 +73,13 @@ export default function MessagePanel({
     <div className="h-full flex flex-col">
       {activeAnnotation && assigneeId && assignee && (
         <div className="px-3 py-2 border-b flex items-center gap-2 text-xs text-muted-foreground">
-          <img
+          <Image
             src={assignee.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(assignee.label)}`}
             alt={assignee.label}
+            width={16}
+            height={16}
             className="h-4 w-4 rounded-full border object-cover"
+            unoptimized
           />
           <span>Assigned to {assignee.label}</span>
         </div>
@@ -90,7 +93,7 @@ export default function MessagePanel({
             <div key={m.id} className="text-sm p-2 rounded-md border flex items-center justify-between gap-2">
               <div className="flex items-start gap-3">
                 {avatarLoaded ? (
-                  <NextImage src={avatar} alt={display} width={24} height={24} unoptimized className="h-6 w-6 rounded-full border object-cover mt-0.5" />
+                  <Image src={avatar} alt={display} width={24} height={24} unoptimized className="h-6 w-6 rounded-full border object-cover mt-0.5" />
                 ) : (
                   <Skeleton className="h-6 w-6 rounded-full mt-0.5" />
                 )}

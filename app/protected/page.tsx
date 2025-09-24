@@ -1,12 +1,11 @@
 // app/protected/page.tsx
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { Plus } from "lucide-react";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import MembersDialog from "@/components/members-dialog";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { NewProjectChooser } from "./_components/NewProjectChooser";
 import { revalidatePath } from "next/cache";
 import type { User } from "@supabase/supabase-js";
 import Link from "next/link";
@@ -27,10 +26,6 @@ type Membership = {
 };
 
 // --- Helpers
-function simpleNameFromUrl(u: URL) {
-  const path = u.pathname.replace(/\/$/, "");
-  return path && path !== "/" ? `${u.hostname}${path}` : u.hostname;
-}
 
 export default async function ProtectedPage() {
   const supabase = await createClient();
@@ -48,62 +43,62 @@ export default async function ProtectedPage() {
   //   console.error("auth.getUser failed", e);
   // }
 
-  async function createProject(formData: FormData) {
+  // Removed legacy "create project by URL" action in favor of NewProjectChooser
+
+  async function createNewProject(formData: FormData) {
     "use server";
-
-    const rawUrl = String(formData.get("url") ?? "").trim();
-    if (!rawUrl) return;
-
-    // Normalize URL
-    let parsed: URL;
-    try {
-      parsed = new URL(/^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`);
-    } catch {
-      throw new Error("Invalid URL");
-    }
+    const kind = String(formData.get("type") || "");
+    const rawName = (formData.get("project_name") || "").toString().trim();
+    const rawUrl = (formData.get("url") || "").toString().trim();
+    const file = formData.get("image_file") as File | null;
 
     const s = await createClient();
-
-    // Who is creating?
-    const {
-      data: { user },
-      error: userErr,
-    } = await s.auth.getUser();
-    if (userErr || !user) throw new Error("Not authenticated");
-
-    const creatorId = user.id;
-    const candidate = simpleNameFromUrl(parsed);
-    const name = candidate?.slice(0, 120) || "Project";
-
-    // Pre-generate id
-    const newId = crypto.randomUUID();
-
-    // Insert project with owner_id
-    const { error: insertErr } = await s.from("projects").insert({
-      id: newId,
-      owner_id: creatorId,
-      name,
-      origin: parsed.toString(),
-    });
-    if (insertErr) {
-      console.error("Project insert failed:", insertErr);
-      throw new Error(insertErr.message);
-    }
-
-    // Create owner membership
+    const { data: { user } } = await s.auth.getUser();
+    if (!user) throw new Error("Not authenticated");
+    const id = crypto.randomUUID();
     const admin = createAdminClient();
-    const { error: memErr } = await admin
-      .from("project_members")
-      .upsert(
-        { project_id: newId, user_id: creatorId, role: "owner" as const, joined_at: new Date().toISOString() },
-        { onConflict: "user_id,project_id" }
-      );
-    if (memErr) {
-      console.error("Owner membership upsert failed:", memErr);
-      throw new Error(memErr.message);
+    let origin = "";
+    let finalName = rawName || "Project";
+
+    if (kind === "website") {
+      if (!rawUrl) throw new Error("Missing URL");
+      let parsed: URL;
+      try { parsed = new URL(/^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`); } catch { throw new Error("Invalid URL"); }
+      origin = parsed.toString();
+      if (!rawName) finalName = parsed.hostname.slice(0, 120);
+    } else if (kind === "image") {
+      if (!file) throw new Error("Missing image file");
+      const ext = file.name.split(".").pop() || "png";
+      const objectPath = `project-${id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      console.log("[createNewProject] Upload start", { path: objectPath, fileName: file.name, size: file.size, type: file.type });
+      const { error: upErr } = await admin.storage.from("uploads").upload(objectPath, file, {
+        upsert: true,
+        contentType: file.type,
+        cacheControl: "3600",
+        metadata: { project_id: id },
+      });
+      if (upErr) { console.error("[createNewProject] Upload error", upErr); throw upErr; }
+      // Store proxy-based origin referencing internal secured endpoint
+      const proxyUrl = `/api/storage/image/${objectPath}?project=${id}`;
+      origin = `/image-viewer?src=${encodeURIComponent(proxyUrl)}`;
+      console.log("[createNewProject] Computed origin", { origin, proxyUrl });
+      if (!rawName) finalName = file.name.slice(0, 120);
+    } else {
+      throw new Error("Unknown project type");
     }
 
-    revalidatePath("/protected");
+    const { error: insErr } = await s.from("projects").insert({ id, owner_id: user.id, name: finalName, origin });
+    if (insErr) throw insErr;
+
+    const { error: memErr } = await admin.from("project_members").upsert(
+      { project_id: id, user_id: user.id, role: "owner", joined_at: new Date().toISOString() },
+      { onConflict: "user_id,project_id" }
+    );
+    if (memErr) throw memErr;
+    console.log("[createNewProject] Project inserted", { id, kind, origin });
+    const encoded = encodeURIComponent(origin);
+    console.log("[createNewProject] Redirecting to annotator", { encoded });
+    redirect(`/projects/${id}/annotate?url=${encoded}`);
   }
 
   // Load projects
@@ -340,31 +335,7 @@ export default async function ProtectedPage() {
         </div>
       </div> */}
 
-      {/* Add by URL */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Add a project by URL</CardTitle>
-          <CardDescription>
-            Paste a webpage / repo / doc URL. We’ll store it in <code>projects.origin</code> and set you as owner.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form action={createProject} className="flex gap-2 items-center">
-            <Input
-              type="url"
-              name="url"
-              required
-              placeholder="https://example.com/path"
-              className="flex-1"
-              autoComplete="off"
-            />
-            <Button type="submit" size="sm">
-              <Plus className="w-4 h-4 mr-1" />
-              Create
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+      <NewProjectChooser action={createNewProject} />
 
       <div className="flex flex-col gap-6">
         <div className="flex flex-col gap-2 items-start">
