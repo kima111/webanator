@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
+import Image from "next/image";
 
 type Point = { x: number; y: number };
 
@@ -440,7 +441,7 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
                       const avatar = info.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(info.label)}`;
                       return (
                         <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
-                          <img src={avatar} alt={info.label} className="h-4 w-4 rounded-full border object-cover" />
+                          <Image src={avatar} alt={info.label} width={16} height={16} className="h-4 w-4 rounded-full border object-cover" unoptimized />
                           <span className="truncate">Assigned to {info.label}</span>
                         </div>
                       );
