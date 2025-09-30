@@ -97,8 +97,20 @@ export async function GET(req: Request) {
       .order("created_at", { ascending: true });
 
     if (rawUrl) {
-      // Build candidates: normalized external URL + raw (for leniency)
-      const normalized = extractExternalUrl(rawUrl, req.url);
+      // NEW: normalize image-viewer by src
+      const base = new URL(req.url).origin;
+      let normalized = rawUrl;
+      try {
+        const abs = new URL(rawUrl, base);
+        if (abs.origin === base && abs.pathname === "/image-viewer") {
+          const src = abs.searchParams.get("src") || "";
+          if (src) normalized = new URL(src, base).toString();
+        } else {
+          normalized = extractExternalUrl(rawUrl, req.url);
+        }
+      } catch {
+        normalized = extractExternalUrl(rawUrl, req.url);
+      }
       const candidates = Array.from(new Set([normalized, rawUrl].filter(Boolean))) as string[];
       query = query.in("url", candidates);
     }
@@ -137,8 +149,21 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing fields" }, { status: 400 });
     }
 
-    // Normalize to the external page URL so GET matches immediately
-    const normalizedUrl = extractExternalUrl(url, req.url);
+    // NEW: normalize /image-viewer by its src param, else use existing extractor
+    let normalizedUrl: string;
+    try {
+      const base = new URL(req.url).origin;
+      const u = new URL(url, base);
+      if (u.origin === base && u.pathname === "/image-viewer") {
+        const src = u.searchParams.get("src") || "";
+        if (!src) return NextResponse.json({ error: "Invalid image URL" }, { status: 400 });
+        normalizedUrl = new URL(src, base).toString();
+      } else {
+        normalizedUrl = extractExternalUrl(url, req.url);
+      }
+    } catch {
+      normalizedUrl = extractExternalUrl(url, req.url);
+    }
 
     // Accept either a CSS selector or a point anchor; build a fallback selector if needed
     let finalSelector = selector;

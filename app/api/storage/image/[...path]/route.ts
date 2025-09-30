@@ -3,12 +3,12 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 // Expect query: project=<projectId>
-export async function GET(req: Request, context: unknown) {
+export async function GET(req: Request, { params }: { params: Promise<{ path: string[] }> }) {
   const url = new URL(req.url);
   const projectId = url.searchParams.get("project");
   if (!projectId) return NextResponse.json({ error: "missing project" }, { status: 400 });
-  const { params } = (context as { params: { path: string[] } }) || { params: { path: [] as string[] } };
-  const objectPath = (params?.path || []).join("/");
+  const { path } = await params;
+  const objectPath = (path || []).join("/");
   try {
     // Auth user
     const supa = await createClient();

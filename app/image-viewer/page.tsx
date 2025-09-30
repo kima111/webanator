@@ -29,12 +29,14 @@ export default async function ImageViewerPage({ searchParams }: { searchParams: 
   const src = decodePossiblyDouble(encoded);
   let urlOk = true;
   if (src.startsWith("/api/storage/image/")) {
-    // internal proxied path
+    urlOk = true;
+  } else if (src.startsWith("/")) {
+    // other same-origin internal paths are allowed
     urlOk = true;
   } else {
     try {
       const u = new URL(src);
-      if (!/^https?:$/.test(u.protocol)) urlOk = false;
+      urlOk = /^https?:$/.test(u.protocol);
     } catch { urlOk = false; }
   }
   if (!urlOk) {
@@ -47,8 +49,24 @@ export default async function ImageViewerPage({ searchParams }: { searchParams: 
     );
   }
   return (
-    <div className="w-full h-full flex items-center justify-center bg-black">
-      <img src={src} alt="Project Image" className="max-w-full max-h-full object-contain" />
+    <div className="relative w-screen h-screen bg-background">
+      {/* subtle, theme-aware texture using CSS variables */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-10"
+        style={{
+          backgroundImage:
+            "radial-gradient(circle at 1px 1px, hsl(var(--foreground) / 0.06) 1px, transparent 1px)",
+          backgroundSize: "12px 12px",
+        }}
+      />
+      <div className="w-full h-full flex items-start justify-center pt-6 px-2">
+        <img
+          src={src}
+          alt="Project Image"
+          className="w-auto h-auto max-w-[100vw] max-h-[calc(100vh-2rem)] object-contain"
+        />
+      </div>
     </div>
   );
 }
