@@ -85,14 +85,30 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
     if (!raw) return "";
     try {
       const base = typeof window !== "undefined" ? window.location.origin : "http://localhost";
-      const u = new URL(raw, base);
-      if (!/^https?:$/.test(u.protocol)) return "";
-      if (u.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(u.pathname)) return "";
+      const abs = new URL(raw, base);
+
+      // NEW: support internal image viewer; canonicalize by its src param
+      if (abs.origin === base && abs.pathname === "/image-viewer") {
+        const src = abs.searchParams.get("src") || "";
+        if (!src) return "";
+        const s = new URL(src, base);
+        s.hash = "";
+        if (s.pathname !== "/" && s.pathname.endsWith("/")) {
+          s.pathname = s.pathname.replace(/\/+$/, "");
+        }
+        // If src is same-origin path, we still get http(s) protocol from base
+        return s.toString();
+      }
+
+      if (!/^https?:$/.test(abs.protocol)) return "";
+      if (abs.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(abs.pathname)) return "";
+
       let external = raw;
-      if (u.pathname.startsWith("/api/proxy")) {
-        external = u.searchParams.get("url") ?? "";
+      if (abs.pathname.startsWith("/api/proxy")) {
+        external = abs.searchParams.get("url") ?? "";
       }
       if (!external) return "";
+
       const e = new URL(external, base);
       if (!/^https?:$/.test(e.protocol)) return "";
       if (e.hostname.toLowerCase() === "about" && /^\/+blank$/i.test(e.pathname)) return "";
@@ -355,8 +371,14 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
 
   return (
     <>
-      <div className="relative w-[95vw] h-[95vh] max-w-full max-h-full">
-        <iframe ref={iframeRef} src={src} className="w-full h-full border-0" sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts" />
+  <div className="relative w-full h-full">
+        <iframe
+          key={src}
+          ref={iframeRef}
+          src={src}
+          className="w-full h-full border-0"
+          sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+        />
         <div
           ref={overlayRef}
           className="absolute top-0 left-0"
@@ -375,7 +397,12 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
             const rawText = (a.body?.text ?? "").trim();
             const limit = isActive ? 1000 : 600;
             const preview = rawText.length > limit ? rawText.slice(0, limit).trimEnd() + "…" : rawText;
-            const placeBelow = top < 120;
+            // Prefer placing below unless we're too close to the bottom (footer overlap),
+            // then place above. Also keep below when near the very top.
+            const pinYInViewer = top - scroll.top;
+            const footerHeight = 160; // matches h-40 footer in annotator
+            const nearBottom = (viewerSize.height - pinYInViewer) < (footerHeight + 40);
+            const placeBelow = !nearBottom && pinYInViewer < (viewerSize.height - 120);
             return (
               <div
                 key={a.id}
@@ -413,7 +440,7 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
                   const offsetX = clampedCenter - pinX; // pixels to shift from pin center
                   return (
                     <div
-                      className={`absolute z-10 rounded-md border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 shadow-md ${isActive ? "text-base leading-7" : "text-sm leading-6"}`}
+                      className={`absolute z-50 rounded-md border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 shadow-md ${isActive ? "text-base leading-7" : "text-sm leading-6"}`}
                       style={{
                         top: placeBelow ? 16 : -16,
                         left: offsetX,
