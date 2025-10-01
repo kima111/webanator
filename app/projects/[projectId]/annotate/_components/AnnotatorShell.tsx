@@ -171,6 +171,9 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
     toastTimerRef.current = window.setTimeout(() => setToast(null), 3000) as unknown as number;
   }
 
+  const pageUrlRef = useRef(pageUrl);
+  useEffect(() => { pageUrlRef.current = pageUrl; }, [pageUrl]);
+
   useEffect(() => {
     // Load project images when the project changes (on mount). Avoid re-fetching on image change to prevent footer flicker.
     (async () => {
@@ -184,7 +187,7 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
           for (const it of prev) byUrl.set(it.url, it);
           for (const it of list) byUrl.set(it.url, it);
           // ensure current image at the time of fetch is present
-          const currentAtFetch = getViewerSrc(pageUrl);
+          const currentAtFetch = getViewerSrc(pageUrlRef.current);
           if (currentAtFetch && !byUrl.has(currentAtFetch)) {
             byUrl.set(currentAtFetch, { path: "", url: currentAtFetch });
           }
@@ -192,7 +195,7 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
         });
       } catch {
         // fallback: include current image if no list
-        setImages((current) => (current.length ? current : (getViewerSrc(pageUrl) ? [{ path: "", url: getViewerSrc(pageUrl) }] : current)));
+        setImages((current) => (current.length ? current : (getViewerSrc(pageUrlRef.current) ? [{ path: "", url: getViewerSrc(pageUrlRef.current) }] : current)));
       } finally {
         setIsImagesLoading(false);
       }

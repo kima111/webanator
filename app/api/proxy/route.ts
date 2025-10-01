@@ -378,7 +378,6 @@ async function handleProxy(req: NextRequest, method: "GET" | "POST") {
         if (method === "POST" && (status === 301 || status === 302 || status === 303)) {
           init.method = "GET";
           // Remove any POST body for the redirected GET
-          // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
           delete (init as Record<string, unknown>).body;
         }
         // Update referer to current URL

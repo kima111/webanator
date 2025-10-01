@@ -6,7 +6,6 @@ export default function Error({ error, reset }: { error: Error & { digest?: stri
   useEffect(() => {
   // Optional: report to console for quick inspection
   // Using console for diagnostics here is acceptable in an error boundary context
-  // eslint-disable-next-line no-console
   console.error("Annotate route error:", error);
   }, [error]);
 
