@@ -8,8 +8,15 @@ import MessagePanel from "./MessagePanel";
 import type { Annotation } from "@/lib/types/annotations";
 import { useAnnotationRealtime, useMessagesRealtime } from "@/lib/hooks/realtime";
 import { createClient } from "@/lib/supabase/client";
+import { useSearchParams } from "next/navigation";
 
 export default function AnnotatorShell({ projectId, initialUrl }: { projectId: string; initialUrl: string }) {
+  const search = useSearchParams();
+  useEffect(() => {
+    if (search.get("debug") === "1") {
+      try { localStorage.setItem("annotatorDebug", "1"); } catch {}
+    }
+  }, [search]);
   function decodeMaybe(u: string): string {
     if (!u) return u;
     try {
@@ -30,10 +37,12 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
 
   const { annotations, createAnnotation, announceCreated } = useAnnotationRealtime(projectId);
   const { messages, sendMessage, subscribeTo, deleteMessage } = useMessagesRealtime();
+  const subscribeToRef = useRef(subscribeTo);
+  useEffect(() => { subscribeToRef.current = subscribeTo; }, [subscribeTo]);
 
   useEffect(() => {
-    if (activeAnnotationId) subscribeTo(activeAnnotationId);
-  }, [activeAnnotationId, subscribeTo]);
+    if (activeAnnotationId) subscribeToRef.current(activeAnnotationId);
+  }, [activeAnnotationId]);
 
   // Normalize a URL: unwrap /api/proxy?url=..., drop hash, normalize trailing slash
   function canonicalizeUrl(raw: string): string {
@@ -162,6 +171,9 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
     toastTimerRef.current = window.setTimeout(() => setToast(null), 3000) as unknown as number;
   }
 
+  const pageUrlRef = useRef(pageUrl);
+  useEffect(() => { pageUrlRef.current = pageUrl; }, [pageUrl]);
+
   useEffect(() => {
     // Load project images when the project changes (on mount). Avoid re-fetching on image change to prevent footer flicker.
     (async () => {
@@ -175,7 +187,7 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
           for (const it of prev) byUrl.set(it.url, it);
           for (const it of list) byUrl.set(it.url, it);
           // ensure current image at the time of fetch is present
-          const currentAtFetch = getViewerSrc(pageUrl);
+          const currentAtFetch = getViewerSrc(pageUrlRef.current);
           if (currentAtFetch && !byUrl.has(currentAtFetch)) {
             byUrl.set(currentAtFetch, { path: "", url: currentAtFetch });
           }
@@ -183,7 +195,7 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
         });
       } catch {
         // fallback: include current image if no list
-        setImages((current) => (current.length ? current : (getViewerSrc(pageUrl) ? [{ path: "", url: getViewerSrc(pageUrl) }] : current)));
+        setImages((current) => (current.length ? current : (getViewerSrc(pageUrlRef.current) ? [{ path: "", url: getViewerSrc(pageUrlRef.current) }] : current)));
       } finally {
         setIsImagesLoading(false);
       }
@@ -280,7 +292,6 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
 
   // Supabase realtime subscription for annotation updates
   // Deliberately only depend on projectId; re-fetching on pageUrl change causes footer flicker
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const supabase = createClient();
     const channel = supabase
