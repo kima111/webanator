@@ -24,6 +24,24 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
   const [shiftHeld, setShiftHeld] = useState(false);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [membersByProject, setMembersByProject] = useState<Record<string, Record<string, { label: string; avatar_url?: string | null }>>>({});
+  const [debugOpen, setDebugOpen] = useState(false);
+  type DebugItem = { ts: number; kind: string; data?: unknown };
+  const [debugItems, setDebugItems] = useState<DebugItem[]>([]);
+  const [copied, setCopied] = useState(false);
+  const [navInput, setNavInput] = useState("");
+
+  // Auto-open debug if ?debug=1 or local flag set; persist toggle
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("debug") === "1") setDebugOpen(true);
+      const prev = localStorage.getItem("annotatorDebug");
+      if (prev === "1") setDebugOpen(true);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem("annotatorDebug", debugOpen ? "1" : "0"); } catch {}
+  }, [debugOpen]);
 
   useEffect(() => {
     if (!activeId) return;
@@ -53,7 +71,12 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
   const [newAnnoOpen, setNewAnnoOpen] = useState(false);
   const [draftText, setDraftText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
+  const [isNavigating, setIsNavigating] = useState(false);
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const [showLoginHint, setShowLoginHint] = useState(false);
+  const loginHitsRef = useRef<number[]>([]);
   const pendingRef = useRef<{ selector: { type: "css"; value: string }; anchor: Point } | null>(null);
+  const navTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     const clear = () => setShiftHeld(false);
@@ -73,13 +96,69 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
         if (rec.type === "ANNOTATION_CLICK" && typeof rec.id === "string") {
           onSelect(rec.id);
         }
+        if (rec.type === "PROXY_NAV_START") {
+          setIsNavigating(true);
+          if (navTimeoutRef.current) window.clearTimeout(navTimeoutRef.current);
+          navTimeoutRef.current = window.setTimeout(() => setIsNavigating(false), 6000);
+        }
+        if (rec.type === "PROXY_NAV_END") {
+          setIsNavigating(false);
+          if (navTimeoutRef.current) { window.clearTimeout(navTimeoutRef.current); navTimeoutRef.current = null; }
+        }
+        if (rec.type === "PROXY_DEBUG") {
+          const item: DebugItem = { ts: typeof rec.ts === "number" ? (rec.ts as number) : Date.now(), kind: String(rec.kind ?? "event"), data: rec.data };
+          setDebugItems((prev) => {
+            const next = prev.concat(item);
+            return next.length > 250 ? next.slice(next.length - 250) : next;
+          });
+        }
       }
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
   }, [onSelect]);
 
+  // Tell the iframe to enable/disable runtime debug emission
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    try {
+      iframe?.contentWindow?.postMessage({ type: "PROXY_DEBUG_ENABLE", value: debugOpen }, "*");
+    } catch {}
+  }, [debugOpen, url]);
+
+  async function copyAllDebug() {
+    try {
+      // Copy in chronological order
+      const payload = debugItems.slice().sort((a, b) => a.ts - b.ts);
+      const text = JSON.stringify(payload, null, 2);
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        // Fallback for older browsers
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  }
+
   const src = url?.trim() ? url : "about:blank";
+  const frameSrc = useMemo(() => {
+    try {
+      if (!src || src.startsWith("about:")) return src;
+      const hasQuery = src.includes("?");
+      return `${src}${hasQuery ? "&" : "?"}r=${reloadNonce}`;
+    } catch {
+      return src;
+    }
+  }, [src, reloadNonce]);
 
   function canonicalize(raw?: string): string {
     if (!raw) return "";
@@ -132,6 +211,20 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
         if (external && external !== last) {
           last = external;
           onNavigated?.(external);
+          // Heuristic: detect repeated landings on login-like pages in a short window
+          try {
+            const u = new URL(external);
+            const p = u.pathname.toLowerCase();
+            const looksLogin = /(^|\/)login(\/|$)|(^|\/)sign-?in(\/|$)|(^|\/)auth\/(login|signin)(\/|$)/.test(p);
+            if (looksLogin) {
+              const now = Date.now();
+              // keep only hits within last 7 seconds
+              loginHitsRef.current = (loginHitsRef.current || []).filter((t) => now - t < 7000);
+              loginHitsRef.current.push(now);
+              // if we hit login 2+ times in 7s, show hint
+              if (loginHitsRef.current.length >= 2) setShowLoginHint(true);
+            }
+          } catch {}
         }
       } catch {}
     };
@@ -373,12 +466,163 @@ export default function IframeOverlay({ url, annotations, onSelect, onCreateAt, 
     <>
   <div className="relative w-full h-full">
         <iframe
-          key={src}
+          key={frameSrc}
           ref={iframeRef}
-          src={src}
+          src={frameSrc}
           className="w-full h-full border-0"
           sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
         />
+        {/* Debug toggle button */}
+        <button
+          type="button"
+          onClick={() => setDebugOpen((v) => !v)}
+          className="absolute top-2 right-2 z-50 rounded bg-background/80 px-2 py-1 text-xs shadow ring-1 ring-border hover:bg-background/90"
+          title={debugOpen ? "Hide debug" : "Show debug"}
+        >
+          {debugOpen ? "🪲 Hide" : "🪲 Debug"}
+        </button>
+        {isNavigating && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-background/30 backdrop-blur-sm">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              <span>Loading…</span>
+            </div>
+          </div>
+        )}
+        {debugOpen && (
+          <div className="absolute top-10 right-2 z-50 w-[380px] max-w-[90%] max-h-[60%] overflow-hidden rounded-md border bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/70 shadow">
+            <div className="flex items-center justify-between border-b px-2 py-1 text-xs">
+              <div className="truncate">Debug · {new Date().toLocaleTimeString()} · {canonicalize(src) || "about:blank"}</div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  className="rounded px-1 py-0.5 hover:bg-muted"
+                  onClick={copyAllDebug}
+                  title="Copy all debug entries as JSON to clipboard"
+                >
+                  {copied ? "Copied" : "Copy all"}
+                </button>
+                <button
+                  type="button"
+                  className="rounded px-1 py-0.5 hover:bg-muted"
+                  onClick={() => {
+                    try {
+                      if (!src || src.startsWith("about:")) return;
+                      const u = new URL(src);
+                      u.searchParams.set("debug_html", "1");
+                      window.open(u.toString(), "_blank", "noopener,noreferrer");
+                    } catch {}
+                  }}
+                  title="Open current page HTML (rewritten) in a new tab"
+                >
+                  View HTML
+                </button>
+                <input
+                  className="w-28 rounded border px-1 py-0.5"
+                  placeholder="/login"
+                  value={navInput}
+                  onChange={(e) => setNavInput(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="rounded px-1 py-0.5 hover:bg-muted"
+                  onClick={() => {
+                    try {
+                      const iframe = iframeRef.current; if (!iframe) return;
+                      let target = navInput.trim() || "/login";
+                      // If user typed absolute app-origin URL, remap to external origin
+                      try {
+                        const u = new URL(target, window.location.origin);
+                        if (u.origin === window.location.origin && u.pathname !== "/api/proxy") {
+                          // let runtime remap; we just forward the href
+                          target = u.toString();
+                        }
+                      } catch {}
+                      iframe.contentWindow?.postMessage({ type: "PROXY_NAV_TO", url: target }, "*");
+                    } catch {}
+                  }}
+                  title="Navigate iframe to this path (default /login)"
+                >
+                  Go
+                </button>
+                <button
+                  type="button"
+                  className="rounded px-1 py-0.5 hover:bg-muted"
+                  onClick={() => {
+                    try { if (src && !src.startsWith("about:")) window.open(src, "_blank", "noopener,noreferrer"); } catch {}
+                  }}
+                  title="Open current page in a new tab (through proxy) to complete login"
+                >
+                  Open in new tab
+                </button>
+                <button
+                  type="button"
+                  className="rounded px-1 py-0.5 hover:bg-muted"
+                  onClick={() => setReloadNonce((n) => n + 1)}
+                  title="Reload iframe after you finish signing in"
+                >
+                  Reload
+                </button>
+                <button
+                  type="button"
+                  className="rounded px-1 py-0.5 hover:bg-muted"
+                  onClick={() => setDebugItems([])}
+                  title="Clear"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[calc(60vh-2.5rem)] overflow-auto p-2">
+              {debugItems.length === 0 ? (
+                <div className="text-xs text-muted-foreground">No events yet. Interact with the page to see proxy/debug events.</div>
+              ) : (
+                <ul className="space-y-1">
+                  {debugItems.slice().reverse().map((it, idx) => (
+                    <li key={idx} className="rounded bg-muted/40 p-1 text-[11px] leading-4">
+                      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                        <span>{new Date(it.ts).toLocaleTimeString()}</span>
+                        <span className="ml-2 font-mono">{it.kind}</span>
+                      </div>
+                      {it.data !== undefined && (
+                        <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-words font-mono text-[10px]">{(() => {
+                          try { return JSON.stringify(it.data, null, 2); } catch { return String(it.data); }
+                        })()}</pre>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+        {showLoginHint && (
+          <div className="absolute left-1/2 top-3 z-40 -translate-x-1/2 rounded-md border bg-background/90 backdrop-blur px-3 py-2 text-xs shadow flex items-center gap-2">
+            <span className="opacity-80">Having trouble logging in?</span>
+            <button
+              type="button"
+              className="rounded px-2 py-1 bg-muted hover:bg-muted/80"
+              onClick={() => { try { if (src && !src.startsWith("about:")) window.open(src, "_blank", "noopener,noreferrer"); } catch {} }}
+            >
+              Open in new tab
+            </button>
+            <button
+              type="button"
+              className="rounded px-2 py-1 bg-muted hover:bg-muted/80"
+              onClick={() => setReloadNonce((n) => n + 1)}
+            >
+              Reload
+            </button>
+            <button
+              type="button"
+              className="ml-1 rounded px-2 py-1 hover:bg-muted"
+              onClick={() => setShowLoginHint(false)}
+              title="Dismiss"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         <div
           ref={overlayRef}
           className="absolute top-0 left-0"

@@ -8,8 +8,15 @@ import MessagePanel from "./MessagePanel";
 import type { Annotation } from "@/lib/types/annotations";
 import { useAnnotationRealtime, useMessagesRealtime } from "@/lib/hooks/realtime";
 import { createClient } from "@/lib/supabase/client";
+import { useSearchParams } from "next/navigation";
 
 export default function AnnotatorShell({ projectId, initialUrl }: { projectId: string; initialUrl: string }) {
+  const search = useSearchParams();
+  useEffect(() => {
+    if (search.get("debug") === "1") {
+      try { localStorage.setItem("annotatorDebug", "1"); } catch {}
+    }
+  }, [search]);
   function decodeMaybe(u: string): string {
     if (!u) return u;
     try {
@@ -30,10 +37,12 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
 
   const { annotations, createAnnotation, announceCreated } = useAnnotationRealtime(projectId);
   const { messages, sendMessage, subscribeTo, deleteMessage } = useMessagesRealtime();
+  const subscribeToRef = useRef(subscribeTo);
+  useEffect(() => { subscribeToRef.current = subscribeTo; }, [subscribeTo]);
 
   useEffect(() => {
-    if (activeAnnotationId) subscribeTo(activeAnnotationId);
-  }, [activeAnnotationId, subscribeTo]);
+    if (activeAnnotationId) subscribeToRef.current(activeAnnotationId);
+  }, [activeAnnotationId]);
 
   // Normalize a URL: unwrap /api/proxy?url=..., drop hash, normalize trailing slash
   function canonicalizeUrl(raw: string): string {
@@ -280,7 +289,6 @@ export default function AnnotatorShell({ projectId, initialUrl }: { projectId: s
 
   // Supabase realtime subscription for annotation updates
   // Deliberately only depend on projectId; re-fetching on pageUrl change causes footer flicker
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const supabase = createClient();
     const channel = supabase
